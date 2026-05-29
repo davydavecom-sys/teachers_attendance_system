@@ -37,7 +37,7 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
             class_id INTEGER, 
             day_of_week TEXT, 
-            lesson_number INTEGER, \n"
+            lesson_number INTEGER, 
             subject TEXT,
             FOREIGN KEY(class_id) REFERENCES classes(id)
         )"""
