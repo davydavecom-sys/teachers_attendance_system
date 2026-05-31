@@ -44,6 +44,7 @@ def init_database():
         )"""
     )
     
+    # Updated table to support tracking Recovered status explicitly
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS attendance_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -83,9 +84,8 @@ ELECTIVE_SPLITS = {
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
-# Helper to find dates belonging to a targeted week number
 def get_dates_for_week(target_date):
-    start_of_week = target_date - datetime.timedelta(days=target_date.weekday()) # Monday
+    start_of_week = target_date - datetime.timedelta(days=target_date.weekday())
     return {WEEKDAYS[i]: (start_of_week + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(5)}
 
 # ---------------------------------------------------------
@@ -131,7 +131,6 @@ if menu == "Attendance Log":
                 st.warning(f"No master timetable entries found for {day_name} in this class.")
             else:
                 st.write(f"### Grid View for {day_name}, {date_str}")
-                
                 form_payloads = {}
                 
                 for (tt_id, lesson_num, raw_subject) in slots:
@@ -162,7 +161,7 @@ if menu == "Attendance Log":
                             )
                             existing = cursor.fetchone()
                             
-                            d_status = existing[3] if existing else "Present"
+                            d_status = existing[3] if existing else "Unmarked"
                             d_in = existing[0] if existing else ""
                             d_out = existing[1] if existing else ""
                             d_assg = existing[2] if existing else "No"
@@ -171,15 +170,15 @@ if menu == "Attendance Log":
                             st.markdown(f"**Track: {sub}** (Teacher: *{display_teacher}*)")
                             c1, c2, c3, c4, c5 = st.columns(5)
                             with c1:
-                                status = st.selectbox("Status", ["Present", "Absent", "N/A"], index=["Present", "Absent", "N/A"].index(d_status), key=f"status_{tt_id}_{sub}")
+                                status = st.selectbox("Status", ["Present", "Absent", "Recovered", "Unmarked"], index=["Present", "Absent", "Recovered", "Unmarked"].index(d_status), key=f"status_{tt_id}_{sub}")
                             with c2:
                                 time_in = st.text_input("Time In", value=d_in, placeholder="e.g. 08:20", key=f"in_{tt_id}_{sub}")
                             with c3:
                                 time_out = st.text_input("Time Out", value=d_out, placeholder="e.g. 09:00", key=f"out_{tt_id}_{sub}")
                             with c4:
-                                assg = st.selectbox("Assignment", ["No", "Yes"], index=["No", "Yes"].index(d_assg), key=f"assg_{tt_id}_{sub}")
+                                assg = st.selectbox("Assignment Given", ["No", "Yes"], index=["No", "Yes"].index(d_assg), key=f"assg_{tt_id}_{sub}")
                             with c5:
-                                reason = st.text_input("Reason if Absent", value=d_reason, placeholder="Notes", key=f"reason_{tt_id}_{sub}")
+                                reason = st.text_input("Reason / Notes", value=d_reason, placeholder="Absent Reason/Notes", key=f"reason_{tt_id}_{sub}")
                                 
                             form_payloads[(tt_id, sub)] = (status, time_in, time_out, assg, reason)
                             if is_split:
@@ -201,7 +200,7 @@ if menu == "Attendance Log":
                         )
                         records_saved += 1
                     conn.commit()
-                    st.success(f"Successfully synchronized {records_saved} structural lesson records for {date_str}!")
+                    st.success(f"Successfully synchronized {records_saved} lesson tracks for {date_str}!")
                     st.rerun()
 
 # --- VIEW 2: TEACHERS & ASSIGNMENTS PANEL ---
@@ -369,7 +368,7 @@ elif menu == "System Data Importer":
 # --- VIEW 4: PRINT ENGINE AND EXPORT VIEW (WEEKLY REPORT ENGINE) ---
 elif menu == "Print & Export Sheets":
     st.subheader("🖨️ Generate Official Weekly Registers & Performance Analysis")
-    st.write("Select any date within the targeted school week. The system will automatically build a structured 50-lesson tracking summary sheet.")
+    st.write("Select any date within the targeted school week to generate the expanded structural verification sheet.")
     
     cursor.execute("SELECT name FROM classes ORDER BY name")
     classes_list = [r[0] for r in cursor.fetchall()]
@@ -383,7 +382,6 @@ elif menu == "Print & Export Sheets":
         with col_d:
             exp_date = st.date_input("Select Week Date", datetime.date.today(), key="exp_date")
         
-        # Calculate start and end ranges for the entire target week
         week_dates = get_dates_for_week(exp_date)
         mon_date_str = week_dates["Monday"]
         fri_date_str = week_dates["Friday"]
@@ -391,64 +389,62 @@ elif menu == "Print & Export Sheets":
         st.markdown("---")
         st.markdown(f"### 📋 Weekly Dashboard Preview for **{exp_class}** ({mon_date_str} to {fri_date_str})")
         
-        # Pull Aggregate Teacher Summary Metrics across the whole 5-day week range
+        # Pull Comprehensive Staff Summary Metrics utilizing an explicit LEFT JOIN to ensure ALL teachers are returned
         date_placeholders = list(week_dates.values())
         cursor.execute(
             f"""SELECT 
                     tea.name AS teacher_name,
-                    SUM(CASE WHEN COALESCE(a.status, 'N/A') = 'Present' THEN 1 ELSE 0 END) AS classes_attended,
-                    SUM(CASE WHEN COALESCE(a.status, 'N/A') = 'Absent' AND COALESCE(a.reason_absent, '') != '' THEN 1 ELSE 0 END) AS missed_with_permission,
-                    SUM(CASE WHEN COALESCE(a.status, 'N/A') = 'Absent' AND COALESCE(a.reason_absent, '') = '' THEN 1 ELSE 0 END) AS missed_without_permission
-               FROM timetable t
-               JOIN classes c ON t.class_id = c.id
-               CROSS JOIN (
-                    SELECT timetable_id, date, subject_name, status, reason_absent FROM attendance_log
-               ) a ON t.id = a.timetable_id AND a.date IN ({','.join(['?']*5)})
-               JOIN subject_assignments sa ON c.id = sa.class_id AND a.subject_name = sa.subject_name
-               JOIN teachers tea ON sa.teacher_tsc = tea.tsc_no
-               WHERE c.name = ?
+                    COUNT(CASE WHEN a.status = 'Present' THEN 1 END) AS classes_attended,
+                    COUNT(CASE WHEN a.status = 'Absent' AND COALESCE(a.reason_absent, '') != '' THEN 1 END) AS missed_with_permission,
+                    COUNT(CASE WHEN a.status = 'Absent' AND COALESCE(a.reason_absent, '') = '' THEN 1 END) AS missed_without_permission,
+                    COUNT(CASE WHEN a.status = 'Recovered' THEN 1 END) AS classes_recovered
+               FROM teachers tea
+               LEFT JOIN subject_assignments sa ON tea.tsc_no = sa.teacher_tsc
+               LEFT JOIN classes c ON sa.class_id = c.id AND c.name = ?
+               LEFT JOIN timetable t ON c.id = t.class_id
+               LEFT JOIN attendance_log a ON t.id = a.timetable_id 
+                    AND a.subject_name = sa.subject_name 
+                    AND a.date IN ({','.join(['?']*5)})
                GROUP BY tea.tsc_no
                ORDER BY tea.name""",
-            (*date_placeholders, exp_class)
+            (exp_class, *date_placeholders)
         )
         weekly_teacher_metrics = cursor.fetchall()
         
         if weekly_teacher_metrics:
             import pandas as pd
             st.markdown("**Cumulative Weekly Teacher Evaluation Matrix Summary**")
-            df_metrics = pd.DataFrame(weekly_teacher_metrics, columns=["Teacher Name", "Total Lessons Attended", "Missed (With Permission)", "Missed (Without Permission)"])
+            df_metrics = pd.DataFrame(weekly_teacher_metrics, columns=["Teacher Name", "Total Lessons Attended", "Missed (With Permission)", "Missed (Without Permission)", "Recovered Lessons"])
             st.dataframe(df_metrics, use_container_width=True, hide_index=True)
-        else:
-            st.info("No active teacher lessons logged for this entire week range yet.")
             
-        if st.button("Generate Official Weekly TLAR PDF Document", type="primary", use_container_width=True):
-            filename = f"Weekly_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
-            doc = SimpleDocTemplate(filename, pagesize=letter, rightMargin=20, leftMargin=20, topMargin=25, bottomMargin=25)
+        if st.button("Generate Official Weekly Expanded TLAR PDF Document", type="primary", use_container_width=True):
+            filename = f"Weekly_Detailed_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
+            # Set to Letter landscape layout to handle advanced multi-metric tracking columns easily
+            doc = SimpleDocTemplate(filename, pagesize=(792, 612), rightMargin=20, leftMargin=20, topMargin=25, bottomMargin=25)
             story = []
             styles = getSampleStyleSheet()
             
-            title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=11, leading=13, alignment=1, textColor=colors.HexColor("#1A237E"))
-            section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=9, leading=11, spaceBefore=10, spaceAfter=4, textColor=colors.HexColor("#1A237E"))
-            meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=8, leading=12)
-            grid_text_style = ParagraphStyle('GridText', parent=styles['Normal'], fontSize=7, leading=9, alignment=1)
+            title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=12, leading=14, alignment=1, textColor=colors.HexColor("#1A237E"))
+            section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=10, leading=12, spaceBefore=12, spaceAfter=6, textColor=colors.HexColor("#1A237E"))
+            meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=8.5, leading=12)
+            grid_text_style = ParagraphStyle('GridText', parent=styles['Normal'], fontSize=7, leading=9, alignment=0)
             
             story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
-            story.append(Paragraph("<b>WEEKLY TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
-            story.append(Spacer(1, 8))
+            story.append(Paragraph("<b>WEEKLY DETAILED TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
+            story.append(Spacer(1, 10))
             
             meta_text = [
-                [Paragraph(f"<b>Institution:</b> St. Michael Senior School - Kipsombe", meta_style), Paragraph("<b>Form Ref:</b> TSC/QAS/TPAD/W-TLAR/01", meta_style)],
-                [Paragraph(f"<b>Class/Grade/Form:</b> {exp_class}", meta_style), Paragraph(f"<b>Weekly Scope:</b> Mon {mon_date_str} — Fri {fri_date_str}", meta_style)]
+                [Paragraph(f"<b>Institution/Campus:</b> St. Michael Senior School - Kipsombe", meta_style), Paragraph("<b>Form Reference:</b> TSC/QAS/TPAD/W-TLAR/2026/V3", meta_style)],
+                [Paragraph(f"<b>Class / Stream Group:</b> {exp_class}", meta_style), Paragraph(f"<b>Weekly Log Period:</b> {mon_date_str} to {fri_date_str}", meta_style)]
             ]
-            meta_table = Table(meta_text, colWidths=[290, 290])
+            meta_table = Table(meta_text, colWidths=[376, 376])
             meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
             story.append(meta_table)
             
-            # SECTION A: THE 5-DAY AT A GLANCE STATUS GRID (10 Lessons x 5 Days)
-            story.append(Paragraph("<b>SECTION A: WEEKLY LESSON TRACKING MATRIX (AT A GLANCE)</b>", section_style))
+            # SECTION A: EXTENDED STATUS MATRIX
+            story.append(Paragraph("<b>SECTION A: WEEKLY LESSON TRACKING MATRIX WITH VERIFIED TRACK TIMINGS</b>", section_style))
             
-            # Setup headers for the days of the week
-            grid_headers = ["Lesson", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+            grid_headers = ["Lesson Slot", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
             grid_data = [grid_headers]
             
             for l_num in range(1, 11):
@@ -456,7 +452,6 @@ elif menu == "Print & Export Sheets":
                 for day in WEEKDAYS:
                     d_str = week_dates[day]
                     
-                    # Fetch timetable entry for this class, day, and lesson
                     cursor.execute(
                         """SELECT t.id, t.subject FROM timetable t
                            JOIN classes c ON t.class_id = c.id
@@ -466,83 +461,80 @@ elif menu == "Print & Export Sheets":
                     t_slot = cursor.fetchone()
                     
                     if not t_slot:
-                        row_cells.append("-")
+                        row_cells.append(Paragraph("<font color='grey'>- Non-Teaching -</font>", grid_text_style))
                     else:
                         tt_id, raw_sub = t_slot
                         active_subs = ELECTIVE_SPLITS.get(raw_sub, [raw_sub])
                         
-                        # Loop through individual parallel parts to get status codes
                         status_flags = []
                         for sub in active_subs:
                             cursor.execute(
-                                """SELECT status FROM attendance_log 
+                                """SELECT status, time_in, time_out, assignment_given FROM attendance_log 
                                    WHERE timetable_id = ? AND date = ? AND subject_name = ?""",
                                 (tt_id, d_str, sub)
                             )
                             log_row = cursor.fetchone()
-                            status_val = log_row[0] if log_row else "N/A"
                             
-                            # Convert status to a short compact letter code
-                            if status_val == "Present":
-                                flag = "P"
-                            elif status_val == "Absent":
-                                flag = "A"
+                            if log_row:
+                                status_val, ti, to, asg = log_row
+                                ti_str = ti if ti.strip() else "00:00"
+                                to_str = to if to.strip() else "00:00"
+                                status_flags.append(f"<b>{sub}</b>: {status_val}<br/>⏱️ {ti_str}-{to_str}<br/>📝 Asg: {asg}")
                             else:
-                                flag = "?"
-                            status_flags.append(f"{sub}:{flag}")
-                        
-                        # Join multiple tracks cleanly with linebreaks if it is a split elective
-                        cell_markup = "<br/>".join(status_flags)
+                                status_flags.append(f"<b>{sub}</b>: Unmarked<br/>⏱️ --:--<br/>📝 Asg: No")
+                                
+                        cell_markup = "<br/>-------------------<br/>".join(status_flags)
                         row_cells.append(Paragraph(cell_markup, grid_text_style))
                         
                 grid_data.append(row_cells)
                 
-            matrix_table = Table(grid_data, colWidths=[60, 104, 104, 104, 104, 104])
+            # Landscape distribution layout column metrics
+            matrix_table = Table(grid_data, colWidths=[72, 136, 136, 136, 136, 136])
             matrix_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#EEEEEE")),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('ALIGN', (1,1), (-1,-1), 'LEFT'),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0,0), (-1,-1), 7),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('TOPPADDING', (0,0), (-1,-1), 4),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ('TOPPADDING', (0,0), (-1,-1), 5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
             ]))
             story.append(matrix_table)
-            story.append(Spacer(1, 4))
-            story.append(Paragraph("<font size=6 color=grey>* Legend Indicators — [P]: Present / Attended | [A]: Absent / Missed | [?]: No Status Filled</font>", meta_style))
+            story.append(Spacer(1, 10))
             
-            # SECTION B: WEEKLY TEACHER EVALUATION SUMMARY
-            story.append(Paragraph("<b>SECTION B: CUMULATIVE WEEKLY TEACHER PERFORMANCE EXTRACT</b>", section_style))
-            summary_headers = [["Teacher Instructor Name", "Total Lessons Attended", "Missed (With Permission)", "Missed (Without Permission)"]]
+            # SECTION B: EXTENDED COMPREHENSIVE STAFF MATRIX REPORT
+            story.append(Paragraph("<b>SECTION B: CUMULATIVE MASTER TEACHER PERFORMANCE SUMMARY REGISTER (ALL STAFF)</b>", section_style))
+            summary_headers = [["Master Roster Teacher Name", "Classes Attended", "Missed (With Permission)", "Missed (Without Permission)", "Recovered Lessons"]]
             
             for metric in weekly_teacher_metrics:
-                summary_headers.append([metric[0], str(metric[1]), str(metric[2]), str(metric[3])])
+                summary_headers.append([metric[0], str(metric[1]), str(metric[2]), str(metric[3]), str(metric[4])])
                 
-            summary_table = Table(summary_headers, colWidths=[210, 110, 130, 130])
+            summary_table = Table(summary_headers, colWidths=[272, 120, 120, 120, 120])
             summary_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#E0F2F1")),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ('ALIGN', (0,1), (0,-1), 'LEFT'),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,-1), 7.5),
+                ('FONTSIZE', (0,0), (-1,-1), 8),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
                 ('TOPPADDING', (0,0), (-1,-1), 4),
                 ('BOTTOMPADDING', (0,0), (-1,-1), 4),
             ]))
             story.append(summary_table)
-            story.append(Spacer(1, 10))
+            story.append(Spacer(1, 15))
             
             # AUTHORIZATION FOOTER
-            sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=7.5, leading=11)
+            sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=8, leading=12)
             sig_text = [
-                [Paragraph("<b>Compiled By:</b> Class Secretary/Monitor<br/><br/>Sign: _______________________", sig_style),
+                [Paragraph("<b>Compiled By:</b> Class Secretary Monitor<br/><br/>Sign: _______________________", sig_style),
                  Paragraph("<b>Verified By:</b> Deputy Head of Institution<br/><br/>Sign: _______________________", sig_style)],
                 [Paragraph("<br/>Date: _______________________", sig_style), Paragraph("<br/>Date: _______________________", sig_style)],
                 [Paragraph("<br/><br/><b>Confirmed By:</b> Head of Institution<br/><br/>Sign: _______________________", sig_style),
                  Paragraph("<br/><br/><b>Official Institution Stamp Check:</b><br/><br/>[ Place Stamp Box Here ]", sig_style)]
             ]
-            sig_table = Table(sig_text, colWidths=[290, 290])
+            sig_table = Table(sig_text, colWidths=[376, 376])
             sig_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
             story.append(sig_table)
             
@@ -550,7 +542,7 @@ elif menu == "Print & Export Sheets":
             
             with open(filename, "rb") as pdf_file:
                 st.download_button(
-                    label="📥 Download Official Weekly PDF Report Matrix",
+                    label="📥 Download Official Weekly Detailed PDF Report Matrix",
                     data=pdf_file,
                     file_name=filename,
                     mime="application/pdf",
