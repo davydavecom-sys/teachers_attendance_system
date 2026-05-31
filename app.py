@@ -3,7 +3,7 @@ import sqlite3
 import os
 import datetime
 
-# ReportLab imports for generating physical printouts
+# ReportLab imports for generating clean physical weekly documents
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -44,9 +44,6 @@ def init_database():
         )"""
     )
     
-    # We drop the UNIQUE constraint on (timetable_id, date) and replace it with (timetable_id, date, subject_name)
-    # to allow multiple parallel elective tracks to be logged for a single timetable slot.
-    cursor.execute("DROP TABLE IF EXISTS attendance_log;")
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS attendance_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -67,7 +64,6 @@ def init_database():
 
 conn, cursor = init_database()
 
-# Definitive map of how a combined elective block breaks down into individual sub-lessons
 ELECTIVE_SPLITS = {
     "HIST/COMP/AGR": ["HISTO", "COMP", "AGRIC"],
     "CRE CSL": ["CRE", "CSL"],
@@ -82,8 +78,15 @@ ELECTIVE_SPLITS = {
     "PHY CRE": ["PHY", "CRE"],
     "PE ICT": ["PE", "ICT"],
     "CSL ENG": ["CSL", "ENG"],
-    "CH/FREN": ["CHEM", "CRE"] # Fallback mapping placeholder
+    "CH/FREN": ["CHEM", "CRE"]
 }
+
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+# Helper to find dates belonging to a targeted week number
+def get_dates_for_week(target_date):
+    start_of_week = target_date - datetime.timedelta(days=target_date.weekday()) # Monday
+    return {WEEKDAYS[i]: (start_of_week + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(5)}
 
 # ---------------------------------------------------------
 # WEB DASHBOARD INTERFACE
@@ -96,7 +99,7 @@ menu = st.sidebar.radio("Navigation Menu", ["Attendance Log", "Teachers & Assign
 # --- VIEW 1: ATTENDANCE LOG VIEW ---
 if menu == "Attendance Log":
     st.subheader("📝 Daily Lesson Attendance Logging and Updates")
-    st.write("Displaying structured lessons. Elective splits (e.g., History/Computer/Agriculture) automatically expand below to log teachers individually.")
+    st.write("Displaying structured lessons. Elective splits automatically expand below to log teachers individually.")
     
     cursor.execute("SELECT name FROM classes ORDER BY name")
     classes_list = [r[0] for r in cursor.fetchall()]
@@ -132,10 +135,9 @@ if menu == "Attendance Log":
                 form_payloads = {}
                 
                 for (tt_id, lesson_num, raw_subject) in slots:
-                    # Determine if this lesson is an elective split or a regular subject
                     active_subjects = ELECTIVE_SPLITS.get(raw_subject, [raw_subject])
-                    
                     is_split = len(active_subjects) > 1
+                    
                     header_label = f"⏰ Lesson {lesson_num}: {raw_subject}"
                     if raw_subject in ["BREAK", "LUNCH", "FREE", "TEA BREAK"]:
                         header_label = f"☕ {raw_subject} — (Rest Block — Lesson {lesson_num})"
@@ -144,7 +146,6 @@ if menu == "Attendance Log":
                         
                     with st.expander(header_label, expanded=True):
                         for sub in active_subjects:
-                            # Fetch teacher for this specific sub-subject
                             cursor.execute(
                                 """SELECT t.name FROM subject_assignments sa 
                                    JOIN teachers t ON sa.teacher_tsc = t.tsc_no
@@ -154,7 +155,6 @@ if menu == "Attendance Log":
                             t_row = cursor.fetchone()
                             display_teacher = t_row[0] if t_row else "No Instructor Assigned"
                             
-                            # Pull existing logged record for this sub-subject split
                             cursor.execute(
                                 """SELECT time_in, time_out, assignment_given, status, reason_absent 
                                    FROM attendance_log WHERE timetable_id = ? AND date = ? AND subject_name = ?""", 
@@ -224,7 +224,7 @@ elif menu == "Teachers & Assignments":
                 except sqlite3.IntegrityError:
                     st.error("Registration Conflict: Code already exists.")
             else:
-                st.warning("Please fill out all metrics.")
+                st.warning("Please fill out all fields.")
                 
         st.markdown("---")
         st.markdown("#### Assign Subject Teacher Role")
@@ -287,9 +287,7 @@ elif menu == "System Data Importer":
     
     if st.button("Import Complete 10-Lesson Multi-Class Timetable Grid", use_container_width=True):
         target_classes = ["4M", "4S", "3M", "3S", "10 Social Science", "10 Stem"]
-        weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
         
-        # Injected the compound elective block 'HIST/COMP/AGR' explicitly where appropriate
         master_grids = {
             "10 Stem": {
                 "Monday":    ["MAT", "MAT", "TEA BREAK", "KIS", "BIO", "BREAK", "HIS", "KIS", "LUNCH", "CRE CSL"],
@@ -335,7 +333,6 @@ elif menu == "System Data Importer":
             }
         }
         
-        # Seed core target teachers (including elective paths)
         teacher_fallbacks = [
             ("MAT", "T.6"), ("ENG", "T.5"), ("KIS", "T.4"), ("BIO", "T.15"),
             ("CHEM", "T.2"), ("PHY", "T.18"), ("CRE", "T.10"), ("HIS", "T.13"),
@@ -360,7 +357,7 @@ elif menu == "System Data Importer":
                 cursor.execute("INSERT OR REPLACE INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (?, ?, ?)", (class_id, sub, tsc))
             
             class_grid = master_grids.get(c_name, master_grids["10 Stem"])
-            for day in weekdays:
+            for day in WEEKDAYS:
                 lessons = class_grid[day]
                 for index, sub_name in enumerate(lessons):
                     cursor.execute("INSERT INTO timetable (class_id, day_of_week, lesson_number, subject) VALUES (?, ?, ?, ?)", (class_id, day, index + 1, sub_name))
@@ -369,9 +366,10 @@ elif menu == "System Data Importer":
         conn.commit()
         st.success(f"Successfully processed all school grids! Deployed {total_slots_inserted} lesson entries securely.")
 
-# --- VIEW 4: PRINT ENGINE AND EXPORT VIEW ---
+# --- VIEW 4: PRINT ENGINE AND EXPORT VIEW (WEEKLY REPORT ENGINE) ---
 elif menu == "Print & Export Sheets":
-    st.subheader("🖨️ Generate Official Registers & Performance Analysis")
+    st.subheader("🖨️ Generate Official Weekly Registers & Performance Analysis")
+    st.write("Select any date within the targeted school week. The system will automatically build a structured 50-lesson tracking summary sheet.")
     
     cursor.execute("SELECT name FROM classes ORDER BY name")
     classes_list = [r[0] for r in cursor.fetchall()]
@@ -383,17 +381,20 @@ elif menu == "Print & Export Sheets":
         with col_c:
             exp_class = st.selectbox("Select Target Class", classes_list, key="exp_class")
         with col_d:
-            exp_date = st.date_input("Select Target Date", datetime.date.today(), key="exp_date")
+            exp_date = st.date_input("Select Week Date", datetime.date.today(), key="exp_date")
         
-        date_str = exp_date.strftime("%Y-%m-%d")
-        day_name = exp_date.strftime("%A")
+        # Calculate start and end ranges for the entire target week
+        week_dates = get_dates_for_week(exp_date)
+        mon_date_str = week_dates["Monday"]
+        fri_date_str = week_dates["Friday"]
         
         st.markdown("---")
-        st.markdown(f"### 📋 Dashboard Preview for {exp_class} — {date_str} ({day_name})")
+        st.markdown(f"### 📋 Weekly Dashboard Preview for **{exp_class}** ({mon_date_str} to {fri_date_str})")
         
-        # Enhanced SQL Metric Query evaluating individual subject tracks from parallel rows
+        # Pull Aggregate Teacher Summary Metrics across the whole 5-day week range
+        date_placeholders = list(week_dates.values())
         cursor.execute(
-            """SELECT 
+            f"""SELECT 
                     tea.name AS teacher_name,
                     SUM(CASE WHEN COALESCE(a.status, 'N/A') = 'Present' THEN 1 ELSE 0 END) AS classes_attended,
                     SUM(CASE WHEN COALESCE(a.status, 'N/A') = 'Absent' AND COALESCE(a.reason_absent, '') != '' THEN 1 ELSE 0 END) AS missed_with_permission,
@@ -402,137 +403,156 @@ elif menu == "Print & Export Sheets":
                JOIN classes c ON t.class_id = c.id
                CROSS JOIN (
                     SELECT timetable_id, date, subject_name, status, reason_absent FROM attendance_log
-               ) a ON t.id = a.timetable_id AND a.date = ?
+               ) a ON t.id = a.timetable_id AND a.date IN ({','.join(['?']*5)})
                JOIN subject_assignments sa ON c.id = sa.class_id AND a.subject_name = sa.subject_name
                JOIN teachers tea ON sa.teacher_tsc = tea.tsc_no
-               WHERE c.name = ? AND t.day_of_week = ?
+               WHERE c.name = ?
                GROUP BY tea.tsc_no
                ORDER BY tea.name""",
-            (date_str, exp_class, day_name)
+            (*date_placeholders, exp_class)
         )
-        teacher_metrics = cursor.fetchall()
+        weekly_teacher_metrics = cursor.fetchall()
         
-        if teacher_metrics:
+        if weekly_teacher_metrics:
             import pandas as pd
-            df_metrics = pd.DataFrame(teacher_metrics, columns=["Teacher Name", "Lessons Attended", "Missed (With Permission)", "Missed (Without Permission)"])
+            st.markdown("**Cumulative Weekly Teacher Evaluation Matrix Summary**")
+            df_metrics = pd.DataFrame(weekly_teacher_metrics, columns=["Teacher Name", "Total Lessons Attended", "Missed (With Permission)", "Missed (Without Permission)"])
             st.dataframe(df_metrics, use_container_width=True, hide_index=True)
         else:
-            st.info("No active teacher structural records found for this date layout selection.")
+            st.info("No active teacher lessons logged for this entire week range yet.")
             
-        if st.button("Generate Official TLAR 10-Lesson PDF Document", type="primary", use_container_width=True):
-            cursor.execute(
-                """SELECT t.id, t.lesson_number, t.subject FROM timetable t
-                   JOIN classes c ON t.class_id = c.id
-                   WHERE c.name = ? AND t.day_of_week = ?
-                   ORDER BY t.lesson_number""", (exp_class, day_name)
-            )
-            timetable_slots = cursor.fetchall()
+        if st.button("Generate Official Weekly TLAR PDF Document", type="primary", use_container_width=True):
+            filename = f"Weekly_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
+            doc = SimpleDocTemplate(filename, pagesize=letter, rightMargin=20, leftMargin=20, topMargin=25, bottomMargin=25)
+            story = []
+            styles = getSampleStyleSheet()
             
-            if not timetable_slots:
-                st.error("No scheduled records discovered.")
-            else:
-                filename = f"TLAR_{exp_class}_{date_str}.pdf".replace(" ", "_")
-                doc = SimpleDocTemplate(filename, pagesize=letter, rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25)
-                story = []
-                styles = getSampleStyleSheet()
-                
-                title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=12, leading=14, alignment=1, textColor=colors.HexColor("#1A237E"))
-                section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=10, leading=12, spaceBefore=12, spaceAfter=6, textColor=colors.HexColor("#1A237E"))
-                meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=9, leading=13)
-                
-                story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
-                story.append(Paragraph("<b>TEACHER LESSON ATTENDANCE REGISTER (TLAR)</b>", title_style))
-                story.append(Spacer(1, 10))
-                
-                meta_text = [
-                    [Paragraph("<b>School/Institution:</b> St. Michael Senior School - Kipsombe", meta_style), Paragraph("<b>Form Ref:</b> TSC/QAS/TPAD/TLAR/01/REV.2", meta_style)],
-                    [Paragraph(f"<b>Class/Grade/Form:</b> {exp_class}", meta_style), Paragraph(f"<b>Date / Day:</b> {date_str} ({day_name})", meta_style)]
-                ]
-                meta_table = Table(meta_text, colWidths=[280, 280])
-                meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 4)]))
-                story.append(meta_table)
-                
-                story.append(Paragraph("<b>SECTION A: DAILY LESSON ATTENDANCE REGISTER</b>", section_style))
-                table_data = [["Lesson", "Subject Matter", "Assigned Teacher", "Status", "In", "Out", "Assg", "Remarks / Reasons"]]
-                
-                for (tt_id, lesson_num, raw_subject) in timetable_slots:
-                    active_subs = ELECTIVE_SPLITS.get(raw_subject, [raw_subject])
-                    for sub in active_subs:
-                        cursor.execute(
-                            """SELECT t.name FROM subject_assignments sa 
-                               JOIN teachers t ON sa.teacher_tsc = t.tsc_no
-                               JOIN classes c ON sa.class_id = c.id
-                               WHERE c.name = ? AND sa.subject_name = ?""", (exp_class, sub)
-                        )
-                        t_row = cursor.fetchone()
-                        t_name = t_row[0] if t_row else "N/A"
-                        
-                        cursor.execute(
-                            """SELECT status, time_in, time_out, assignment_given, reason_absent 
-                               FROM attendance_log WHERE timetable_id = ? AND date = ? AND subject_name = ?""", 
-                            (tt_id, date_str, sub)
-                        )
-                        log = cursor.fetchone()
-                        
-                        status = log[0] if log else "N/A"
-                        ti = log[1] if log else ""
-                        to = log[2] if log else ""
-                        asg = log[3] if log else ""
-                        rem = log[4] if log else ""
-                        
-                        table_data.append([f"Lesson {lesson_num}", sub, t_name, status, ti, to, asg, rem])
-                        
-                attendance_table = Table(table_data, colWidths=[55, 80, 110, 50, 45, 45, 40, 145])
-                attendance_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#EEEEEE")),
-                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                    ('ALIGN', (1,1), (2,-1), 'LEFT'),
-                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0,0), (-1,-1), 8),
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                    ('TOPPADDING', (0,0), (-1,-1), 3),
-                    ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-                ]))
-                story.append(attendance_table)
-                
-                story.append(Paragraph("<b>SECTION B: TEACHER EVALUATION SUMMARY EXTRACTION</b>", section_style))
-                summary_headers = [["Teacher Instructor", "Lessons Attended", "Missed (With Permission)", "Missed (Without Permission)"]]
-                for metric in teacher_metrics:
-                    summary_headers.append([metric[0], str(metric[1]), str(metric[2]), str(metric[3])])
+            title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=11, leading=13, alignment=1, textColor=colors.HexColor("#1A237E"))
+            section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=9, leading=11, spaceBefore=10, spaceAfter=4, textColor=colors.HexColor("#1A237E"))
+            meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=8, leading=12)
+            grid_text_style = ParagraphStyle('GridText', parent=styles['Normal'], fontSize=7, leading=9, alignment=1)
+            
+            story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
+            story.append(Paragraph("<b>WEEKLY TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
+            story.append(Spacer(1, 8))
+            
+            meta_text = [
+                [Paragraph(f"<b>Institution:</b> St. Michael Senior School - Kipsombe", meta_style), Paragraph("<b>Form Ref:</b> TSC/QAS/TPAD/W-TLAR/01", meta_style)],
+                [Paragraph(f"<b>Class/Grade/Form:</b> {exp_class}", meta_style), Paragraph(f"<b>Weekly Scope:</b> Mon {mon_date_str} — Fri {fri_date_str}", meta_style)]
+            ]
+            meta_table = Table(meta_text, colWidths=[290, 290])
+            meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
+            story.append(meta_table)
+            
+            # SECTION A: THE 5-DAY AT A GLANCE STATUS GRID (10 Lessons x 5 Days)
+            story.append(Paragraph("<b>SECTION A: WEEKLY LESSON TRACKING MATRIX (AT A GLANCE)</b>", section_style))
+            
+            # Setup headers for the days of the week
+            grid_headers = ["Lesson", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+            grid_data = [grid_headers]
+            
+            for l_num in range(1, 11):
+                row_cells = [f"Lesson {l_num}"]
+                for day in WEEKDAYS:
+                    d_str = week_dates[day]
                     
-                summary_table = Table(summary_headers, colWidths=[200, 110, 125, 125])
-                summary_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#E0F2F1")),
-                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                    ('ALIGN', (0,1), (0,-1), 'LEFT'),
-                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0,0), (-1,-1), 8),
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                    ('TOPPADDING', (0,0), (-1,-1), 4),
-                    ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-                ]))
-                story.append(summary_table)
-                story.append(Spacer(1, 10))
-                
-                sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=8, leading=12)
-                sig_text = [
-                    [Paragraph("<b>Compiled By:</b> Class Secretary/Monitor<br/><br/>Sign: _______________________", sig_style),
-                     Paragraph("<b>Verified By:</b> Deputy Head of Institution<br/><br/>Sign: _______________________", sig_style)],
-                    [Paragraph("<br/>Date: _______________________", sig_style), Paragraph("<br/>Date: _______________________", sig_style)],
-                    [Paragraph("<br/><br/><b>Confirmed By:</b> Head of Institution<br/><br/>Sign: _______________________", sig_style),
-                     Paragraph("<br/><br/><b>Official Institution Stamp Check:</b><br/><br/>[ Place Stamp Box Here ]", sig_style)]
-                ]
-                sig_table = Table(sig_text, colWidths=[280, 280])
-                sig_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
-                story.append(sig_table)
-                
-                doc.build(story)
-                
-                with open(filename, "rb") as pdf_file:
-                    st.download_button(
-                        label="📥 Download Updated Official PDF Report With Teacher Summaries",
-                        data=pdf_file,
-                        file_name=filename,
-                        mime="application/pdf",
-                        use_container_width=True
+                    # Fetch timetable entry for this class, day, and lesson
+                    cursor.execute(
+                        """SELECT t.id, t.subject FROM timetable t
+                           JOIN classes c ON t.class_id = c.id
+                           WHERE c.name = ? AND t.day_of_week = ? AND t.lesson_number = ?""",
+                        (exp_class, day, l_num)
                     )
+                    t_slot = cursor.fetchone()
+                    
+                    if not t_slot:
+                        row_cells.append("-")
+                    else:
+                        tt_id, raw_sub = t_slot
+                        active_subs = ELECTIVE_SPLITS.get(raw_sub, [raw_sub])
+                        
+                        # Loop through individual parallel parts to get status codes
+                        status_flags = []
+                        for sub in active_subs:
+                            cursor.execute(
+                                """SELECT status FROM attendance_log 
+                                   WHERE timetable_id = ? AND date = ? AND subject_name = ?""",
+                                (tt_id, d_str, sub)
+                            )
+                            log_row = cursor.fetchone()
+                            status_val = log_row[0] if log_row else "N/A"
+                            
+                            # Convert status to a short compact letter code
+                            if status_val == "Present":
+                                flag = "P"
+                            elif status_val == "Absent":
+                                flag = "A"
+                            else:
+                                flag = "?"
+                            status_flags.append(f"{sub}:{flag}")
+                        
+                        # Join multiple tracks cleanly with linebreaks if it is a split elective
+                        cell_markup = "<br/>".join(status_flags)
+                        row_cells.append(Paragraph(cell_markup, grid_text_style))
+                        
+                grid_data.append(row_cells)
+                
+            matrix_table = Table(grid_data, colWidths=[60, 104, 104, 104, 104, 104])
+            matrix_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#EEEEEE")),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 7),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('TOPPADDING', (0,0), (-1,-1), 4),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ]))
+            story.append(matrix_table)
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("<font size=6 color=grey>* Legend Indicators — [P]: Present / Attended | [A]: Absent / Missed | [?]: No Status Filled</font>", meta_style))
+            
+            # SECTION B: WEEKLY TEACHER EVALUATION SUMMARY
+            story.append(Paragraph("<b>SECTION B: CUMULATIVE WEEKLY TEACHER PERFORMANCE EXTRACT</b>", section_style))
+            summary_headers = [["Teacher Instructor Name", "Total Lessons Attended", "Missed (With Permission)", "Missed (Without Permission)"]]
+            
+            for metric in weekly_teacher_metrics:
+                summary_headers.append([metric[0], str(metric[1]), str(metric[2]), str(metric[3])])
+                
+            summary_table = Table(summary_headers, colWidths=[210, 110, 130, 130])
+            summary_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#E0F2F1")),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('ALIGN', (0,1), (0,-1), 'LEFT'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 7.5),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('TOPPADDING', (0,0), (-1,-1), 4),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ]))
+            story.append(summary_table)
+            story.append(Spacer(1, 10))
+            
+            # AUTHORIZATION FOOTER
+            sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=7.5, leading=11)
+            sig_text = [
+                [Paragraph("<b>Compiled By:</b> Class Secretary/Monitor<br/><br/>Sign: _______________________", sig_style),
+                 Paragraph("<b>Verified By:</b> Deputy Head of Institution<br/><br/>Sign: _______________________", sig_style)],
+                [Paragraph("<br/>Date: _______________________", sig_style), Paragraph("<br/>Date: _______________________", sig_style)],
+                [Paragraph("<br/><br/><b>Confirmed By:</b> Head of Institution<br/><br/>Sign: _______________________", sig_style),
+                 Paragraph("<br/><br/><b>Official Institution Stamp Check:</b><br/><br/>[ Place Stamp Box Here ]", sig_style)]
+            ]
+            sig_table = Table(sig_text, colWidths=[290, 290])
+            sig_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
+            story.append(sig_table)
+            
+            doc.build(story)
+            
+            with open(filename, "rb") as pdf_file:
+                st.download_button(
+                    label="📥 Download Official Weekly PDF Report Matrix",
+                    data=pdf_file,
+                    file_name=filename,
+                    mime="application/pdf",
+                    use_container_width=True
+                )
