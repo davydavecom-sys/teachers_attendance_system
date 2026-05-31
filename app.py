@@ -71,7 +71,7 @@ if menu == "Attendance Log":
     st.subheader("📝 Daily Lesson Attendance Logging and Updates")
     st.write("Displaying a fixed structure of 10 systematic lessons mapped to the master school schedule.")
     
-    cursor.execute("SELECT name FROM classes")
+    cursor.execute("SELECT name FROM classes ORDER BY name")
     classes_list = [r[0] for r in cursor.fetchall()]
     
     if not classes_list:
@@ -190,9 +190,9 @@ elif menu == "Teachers & Assignments":
         st.markdown("---")
         st.markdown("#### Assign Subject Teacher Role")
         
-        cursor.execute("SELECT id, name FROM classes")
+        cursor.execute("SELECT id, name FROM classes ORDER BY name")
         classes_mapping = cursor.fetchall()
-        cursor.execute("SELECT tsc_no, name FROM teachers")
+        cursor.execute("SELECT tsc_no, name FROM teachers ORDER BY name")
         teachers_mapping = cursor.fetchall()
         
         if not classes_mapping or not teachers_mapping:
@@ -202,7 +202,7 @@ elif menu == "Teachers & Assignments":
             t_options = {f"{name} ({tsc})": tsc for tsc, name in teachers_mapping}
             
             assign_class = st.selectbox("Target Class", list(c_options.keys()))
-            assign_sub = st.selectbox("Subject Name", ["MAT", "ENG", "KIS", "CRE", "GE", "ICT", "PE", "CSL", "BREAK", "LUNCH", "FREE"])
+            assign_sub = st.selectbox("Subject Name", ["MAT", "ENG", "KIS", "CRE", "GE", "ICT", "PE", "CSL", "BIO", "CHEM", "PHY", "HIST", "BREAK", "LUNCH", "FREE"])
             assign_tea = st.selectbox("Assign Teacher", list(t_options.keys()))
             
             if st.button("Commit Subject Assignment", type="primary"):
@@ -233,7 +233,7 @@ elif menu == "Teachers & Assignments":
 # --- VIEW 3: AUTOMATED DATA IMPORTER ---
 elif menu == "System Data Importer":
     st.subheader("⚙️ Automated System Structural Setup Panel")
-    st.write("Inject exactly 10 comprehensive lesson blocks daily for Monday to Friday straight into the system layout matrix.")
+    st.write("Inject structural profiles and 10 daily lesson matrices for all 6 official school classes.")
     
     if st.button("Import School Staff Roster (Teacher numbers list)", use_container_width=True):
         teachers_list = [
@@ -250,33 +250,29 @@ elif menu == "System Data Importer":
         
     st.write(" ")
     
-    if st.button("Import Complete 10-Period Weekly Timetable Grid Structure", use_container_width=True):
-        class_name = "Grade 10 Social Science"
-        cursor.execute("INSERT OR IGNORE INTO classes (name) VALUES (?)", (class_name,))
-        conn.commit()
+    if st.button("Import Complete 10-Period Multi-Class Timetable Grid", use_container_width=True):
+        # Definition of all 6 target classes
+        target_classes = ["4M", "4S", "3M", "3S", "10 Social Science", "10 Stem"]
         
-        cursor.execute("SELECT id FROM classes WHERE name = ?", (class_name,))
-        class_id = cursor.fetchone()[0]
-        
-        # Clear existing structure to prevent duplicate key mismatches
-        cursor.execute("DELETE FROM timetable WHERE class_id = ?", (class_id,))
-        
-        # Establish subject teacher tracking mappings
-        assignments = [
+        # Standardize standard assignment rules to save repetitive manual clicks
+        base_assignments = [
             ("GE", "T.12"), ("CRE", "T.10"), ("MAT", "T.6"), ("ICT", "T.17"),
-            ("KIS", "T.4"), ("ENG", "T.9"), ("CSL", "T.16"), ("PE", "T.11")
+            ("KIS", "T.4"), ("ENG", "T.9"), ("CSL", "T.16"), ("PE", "T.11"),
+            ("BIO", "T.1"), ("CHEM", "T.2"), ("PHY", "T.3"), ("HIST", "T.5")
         ]
-        for sub, tsc in assignments:
-            cursor.execute(
-                "INSERT OR REPLACE INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (?, ?, ?)",
-                (class_id, sub, tsc)
-            )
-            
-        # Define strict 10 periods per day across all weekdays (50 entries total)
+        
         weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
         
-        # Baseline schedules mapped per day to match exactly 10 slots
-        day_templates = {
+        # 10 daily period timetable layouts mapped for standard variants
+        science_day_template = {
+            "Monday":    ["MAT", "MAT", "BREAK", "CHEM", "ENG", "LUNCH", "KIS", "PHY", "FREE", "FREE"],
+            "Tuesday":   ["BIO", "BIO", "BREAK", "KIS", "KIS", "LUNCH", "MAT", "ENG", "FREE", "FREE"],
+            "Wednesday": ["PHY", "MAT", "BREAK", "ENG", "CHEM", "LUNCH", "BIO", "PE", "FREE", "FREE"],
+            "Thursday":  ["CHEM", "PHY", "BREAK", "KIS", "BIO", "LUNCH", "MAT", "HIST", "FREE", "FREE"],
+            "Friday":    ["MAT", "HIST", "BREAK", "PE", "CHEM", "LUNCH", "ENG", "KIS", "FREE", "FREE"]
+        }
+        
+        social_day_template = {
             "Monday":    ["MAT", "MAT", "BREAK", "CRE", "ENG", "LUNCH", "KIS", "GE", "FREE", "FREE"],
             "Tuesday":   ["GE", "ICT", "BREAK", "KIS", "KIS", "LUNCH", "MAT", "ENG", "FREE", "FREE"],
             "Wednesday": ["CSL", "MAT", "BREAK", "ENG", "CRE", "LUNCH", "GE", "PE", "FREE", "FREE"],
@@ -284,26 +280,57 @@ elif menu == "System Data Importer":
             "Friday":    ["MAT", "GE", "BREAK", "PE", "CSL", "LUNCH", "ENG", "KIS", "FREE", "FREE"]
         }
         
-        inserted_slots = 0
-        for day in weekdays:
-            subjects = day_templates[day]
-            for index, sub_name in enumerate(subjects):
-                lesson_number = index + 1
+        total_slots_inserted = 0
+        
+        for c_name in target_classes:
+            # Step 1: Ensure class is safely initialized
+            cursor.execute("INSERT OR IGNORE INTO classes (name) VALUES (?)", (c_name,))
+            conn.commit()
+            
+            cursor.execute("SELECT id FROM classes WHERE name = ?", (c_name,))
+            class_id = cursor.fetchone()[0]
+            
+            # Step 2: Clear old records for clean replacement
+            cursor.execute("DELETE FROM timetable WHERE class_id = ?", (class_id,))
+            cursor.execute("DELETE FROM subject_assignments WHERE class_id = ?", (class_id,))
+            
+            # Step 3: Seed teacher matrix mappings for this specific class
+            for sub, tsc in base_assignments:
                 cursor.execute(
-                    """INSERT OR REPLACE INTO timetable (class_id, day_of_week, lesson_number, subject) 
-                       VALUES (?, ?, ?, ?)""", 
-                    (class_id, day, lesson_number, sub_name)
+                    "INSERT OR REPLACE INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (?, ?, ?)",
+                    (class_id, sub, tsc)
                 )
-                inserted_slots += 1
+            
+            # Step 4: Pick appropriate template map based on class style type
+            if "Stem" in c_name or "S" in c_name or "M" in c_name and c_name != "3M" and c_name != "4M":
+                active_template = science_day_template
+            else:
+                active_template = social_day_template
                 
+            # Alternative layout split for M-streams just to make data diverse
+            if "M" in c_name:
+                active_template = social_day_template
+                
+            # Step 5: Seed all 50 slots (10 lessons x 5 weekdays) for this class
+            for day in weekdays:
+                subjects = active_template[day]
+                for index, sub_name in enumerate(subjects):
+                    lesson_number = index + 1
+                    cursor.execute(
+                        """INSERT OR REPLACE INTO timetable (class_id, day_of_week, lesson_number, subject) 
+                           VALUES (?, ?, ?, ?)""", 
+                        (class_id, day, lesson_number, sub_name)
+                    )
+                    total_slots_inserted += 1
+                    
         conn.commit()
-        st.success(f"Successfully generated a 50-slot grid ({inserted_slots} structured entries, 10 daily) for '{class_name}'.")
+        st.success(f"Successfully processed all 6 classes! Deployed {total_slots_inserted} clean entries into the 10-period matrix layout.")
 
 # --- VIEW 4: PRINT ENGINE AND EXPORT VIEW ---
 elif menu == "Print & Export Sheets":
     st.subheader("🖨️ Generate Official Registers for Endorsement")
     
-    cursor.execute("SELECT name FROM classes")
+    cursor.execute("SELECT name FROM classes ORDER BY name")
     classes_list = [r[0] for r in cursor.fetchall()]
     
     if not classes_list:
@@ -335,7 +362,6 @@ elif menu == "Print & Export Sheets":
             else:
                 filename = f"TLAR_{exp_class}_{date_str}.pdf".replace(" ", "_")
                 
-                # Setup smaller padding margins to cleanly accommodate all 10 records on one official sheet
                 doc = SimpleDocTemplate(filename, pagesize=letter, rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25)
                 story = []
                 styles = getSampleStyleSheet()
