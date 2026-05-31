@@ -5,7 +5,7 @@ import datetime
 
 # ReportLab imports for generating clean physical weekly documents
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -44,7 +44,6 @@ def init_database():
         )"""
     )
     
-    # Updated table to support tracking Recovered status explicitly
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS attendance_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -365,10 +364,10 @@ elif menu == "System Data Importer":
         conn.commit()
         st.success(f"Successfully processed all school grids! Deployed {total_slots_inserted} lesson entries securely.")
 
-# --- VIEW 4: PRINT ENGINE AND EXPORT VIEW (WEEKLY REPORT ENGINE) ---
+# --- VIEW 4: PRINT ENGINE AND EXPORT VIEW (TWO-PAGE REPORT ENGINE) ---
 elif menu == "Print & Export Sheets":
-    st.subheader("🖨️ Generate Official Weekly Registers & Performance Analysis")
-    st.write("Select any date within the targeted school week to generate the expanded structural verification sheet.")
+    st.subheader("🖨️ Generate Official 2-Page Weekly Registers")
+    st.write("This generation profile compresses all data inputs precisely into an official two-page verification format.")
     
     cursor.execute("SELECT name FROM classes ORDER BY name")
     classes_list = [r[0] for r in cursor.fetchall()]
@@ -389,7 +388,6 @@ elif menu == "Print & Export Sheets":
         st.markdown("---")
         st.markdown(f"### 📋 Weekly Dashboard Preview for **{exp_class}** ({mon_date_str} to {fri_date_str})")
         
-        # Pull Comprehensive Staff Summary Metrics utilizing an explicit LEFT JOIN to ensure ALL teachers are returned
         date_placeholders = list(week_dates.values())
         cursor.execute(
             f"""SELECT 
@@ -417,31 +415,34 @@ elif menu == "Print & Export Sheets":
             df_metrics = pd.DataFrame(weekly_teacher_metrics, columns=["Teacher Name", "Total Lessons Attended", "Missed (With Permission)", "Missed (Without Permission)", "Recovered Lessons"])
             st.dataframe(df_metrics, use_container_width=True, hide_index=True)
             
-        if st.button("Generate Official Weekly Expanded TLAR PDF Document", type="primary", use_container_width=True):
-            filename = f"Weekly_Detailed_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
-            # Set to Letter landscape layout to handle advanced multi-metric tracking columns easily
-            doc = SimpleDocTemplate(filename, pagesize=(792, 612), rightMargin=20, leftMargin=20, topMargin=25, bottomMargin=25)
+        if st.button("Generate Official Two-Page W-TLAR PDF", type="primary", use_container_width=True):
+            filename = f"Weekly_2Page_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
+            
+            # Using landscape page orientation layout configurations (792 width x 612 height)
+            doc = SimpleDocTemplate(filename, pagesize=(792, 612), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
             story = []
             styles = getSampleStyleSheet()
             
             title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=12, leading=14, alignment=1, textColor=colors.HexColor("#1A237E"))
-            section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=10, leading=12, spaceBefore=12, spaceAfter=6, textColor=colors.HexColor("#1A237E"))
-            meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=8.5, leading=12)
-            grid_text_style = ParagraphStyle('GridText', parent=styles['Normal'], fontSize=7, leading=9, alignment=0)
+            section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=9.5, leading=12, spaceBefore=8, spaceAfter=4, textColor=colors.HexColor("#1A237E"))
+            meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=8.5, leading=11)
+            grid_text_style = ParagraphStyle('GridText', parent=styles['Normal'], fontSize=6.5, leading=8.5, alignment=0)
             
+            # -----------------------------------------------------------------
+            # PAGE 1: TITLE META AND SECTION A ATTENDANCE LOG GRID
+            # -----------------------------------------------------------------
             story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
-            story.append(Paragraph("<b>WEEKLY DETAILED TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
-            story.append(Spacer(1, 10))
+            story.append(Paragraph("<b>WEEKLY TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
+            story.append(Spacer(1, 6))
             
             meta_text = [
-                [Paragraph(f"<b>Institution/Campus:</b> St. Michael Senior School - Kipsombe", meta_style), Paragraph("<b>Form Reference:</b> TSC/QAS/TPAD/W-TLAR/2026/V3", meta_style)],
+                [Paragraph(f"<b>Institution/Campus:</b> St. Michael Senior School - Kipsombe", meta_style), Paragraph("<b>Form Reference:</b> TSC/QAS/TPAD/W-TLAR/2026/V4", meta_style)],
                 [Paragraph(f"<b>Class / Stream Group:</b> {exp_class}", meta_style), Paragraph(f"<b>Weekly Log Period:</b> {mon_date_str} to {fri_date_str}", meta_style)]
             ]
             meta_table = Table(meta_text, colWidths=[376, 376])
-            meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
+            meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 1)]))
             story.append(meta_table)
             
-            # SECTION A: EXTENDED STATUS MATRIX
             story.append(Paragraph("<b>SECTION A: WEEKLY LESSON TRACKING MATRIX WITH VERIFIED TRACK TIMINGS</b>", section_style))
             
             grid_headers = ["Lesson Slot", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
@@ -461,7 +462,7 @@ elif menu == "Print & Export Sheets":
                     t_slot = cursor.fetchone()
                     
                     if not t_slot:
-                        row_cells.append(Paragraph("<font color='grey'>- Non-Teaching -</font>", grid_text_style))
+                        row_cells.append(Paragraph("<font color='grey'>- Rest Break -</font>", grid_text_style))
                     else:
                         tt_id, raw_sub = t_slot
                         active_subs = ELECTIVE_SPLITS.get(raw_sub, [raw_sub])
@@ -477,34 +478,43 @@ elif menu == "Print & Export Sheets":
                             
                             if log_row:
                                 status_val, ti, to, asg = log_row
-                                ti_str = ti if ti.strip() else "00:00"
-                                to_str = to if to.strip() else "00:00"
-                                status_flags.append(f"<b>{sub}</b>: {status_val}<br/>⏱️ {ti_str}-{to_str}<br/>📝 Asg: {asg}")
+                                ti_str = ti if ti.strip() else "--:--"
+                                to_str = to if to.strip() else "--:--"
+                                status_flags.append(f"<b>{sub}</b>: {status_val} | ⏱️ {ti_str}-{to_str} | 📝 Asg: {asg}")
                             else:
-                                status_flags.append(f"<b>{sub}</b>: Unmarked<br/>⏱️ --:--<br/>📝 Asg: No")
+                                status_flags.append(f"<b>{sub}</b>: Unmarked | ⏱️ --:-- | 📝 Asg: No")
                                 
-                        cell_markup = "<br/>-------------------<br/>".join(status_flags)
+                        cell_markup = "<br/>".join(status_flags)
                         row_cells.append(Paragraph(cell_markup, grid_text_style))
                         
                 grid_data.append(row_cells)
                 
-            # Landscape distribution layout column metrics
-            matrix_table = Table(grid_data, colWidths=[72, 136, 136, 136, 136, 136])
+            # Optimize space to completely lock Section A on Page 1
+            matrix_table = Table(grid_data, colWidths=[65, 137, 137, 137, 137, 137])
             matrix_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#EEEEEE")),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ('ALIGN', (1,1), (-1,-1), 'LEFT'),
-                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,-1), 7),
+                ('FONTSIZE', (0,0), (-1,-1), 6.5),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('TOPPADDING', (0,0), (-1,-1), 5),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+                ('TOPPADDING', (0,0), (-1,-1), 3),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 3),
             ]))
             story.append(matrix_table)
-            story.append(Spacer(1, 10))
             
-            # SECTION B: EXTENDED COMPREHENSIVE STAFF MATRIX REPORT
+            # FORCE PAGE BREAK TO GENERATE PAGE 2
+            story.append(PageBreak())
+            
+            # -----------------------------------------------------------------
+            # PAGE 2: TITLE META AND SECTION B STAFF SUMMARY MATRIX WITH SIGNATURES
+            # -----------------------------------------------------------------
+            story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
+            story.append(Paragraph("<b>WEEKLY TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
+            story.append(Spacer(1, 6))
+            story.append(meta_table) # Repeat the compact descriptive header block for consistency
+            
             story.append(Paragraph("<b>SECTION B: CUMULATIVE MASTER TEACHER PERFORMANCE SUMMARY REGISTER (ALL STAFF)</b>", section_style))
             summary_headers = [["Master Roster Teacher Name", "Classes Attended", "Missed (With Permission)", "Missed (Without Permission)", "Recovered Lessons"]]
             
@@ -517,15 +527,15 @@ elif menu == "Print & Export Sheets":
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ('ALIGN', (0,1), (0,-1), 'LEFT'),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,-1), 8),
+                ('FONTSIZE', (0,0), (-1,-1), 7.5),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('TOPPADDING', (0,0), (-1,-1), 4),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ('TOPPADDING', (0,0), (-1,-1), 3),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 3),
             ]))
             story.append(summary_table)
             story.append(Spacer(1, 15))
             
-            # AUTHORIZATION FOOTER
+            # AUTHORIZATION SIGNATURE GRID FOOTER
             sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=8, leading=12)
             sig_text = [
                 [Paragraph("<b>Compiled By:</b> Class Secretary Monitor<br/><br/>Sign: _______________________", sig_style),
@@ -535,14 +545,14 @@ elif menu == "Print & Export Sheets":
                  Paragraph("<br/><br/><b>Official Institution Stamp Check:</b><br/><br/>[ Place Stamp Box Here ]", sig_style)]
             ]
             sig_table = Table(sig_text, colWidths=[376, 376])
-            sig_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
+            sig_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
             story.append(sig_table)
             
             doc.build(story)
             
             with open(filename, "rb") as pdf_file:
                 st.download_button(
-                    label="📥 Download Official Weekly Detailed PDF Report Matrix",
+                    label="📥 Download Official 2-Page Weekly PDF Report Matrix",
                     data=pdf_file,
                     file_name=filename,
                     mime="application/pdf",
