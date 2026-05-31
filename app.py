@@ -251,10 +251,8 @@ elif menu == "System Data Importer":
     st.write(" ")
     
     if st.button("Import Complete 10-Period Multi-Class Timetable Grid", use_container_width=True):
-        # Definition of all 6 target classes
         target_classes = ["4M", "4S", "3M", "3S", "10 Social Science", "10 Stem"]
         
-        # Standardize standard assignment rules to save repetitive manual clicks
         base_assignments = [
             ("GE", "T.12"), ("CRE", "T.10"), ("MAT", "T.6"), ("ICT", "T.17"),
             ("KIS", "T.4"), ("ENG", "T.9"), ("CSL", "T.16"), ("PE", "T.11"),
@@ -263,7 +261,6 @@ elif menu == "System Data Importer":
         
         weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
         
-        # 10 daily period timetable layouts mapped for standard variants
         science_day_template = {
             "Monday":    ["MAT", "MAT", "BREAK", "CHEM", "ENG", "LUNCH", "KIS", "PHY", "FREE", "FREE"],
             "Tuesday":   ["BIO", "BIO", "BREAK", "KIS", "KIS", "LUNCH", "MAT", "ENG", "FREE", "FREE"],
@@ -283,52 +280,50 @@ elif menu == "System Data Importer":
         total_slots_inserted = 0
         
         for c_name in target_classes:
-            # Step 1: Ensure class is safely initialized
             cursor.execute("INSERT OR IGNORE INTO classes (name) VALUES (?)", (c_name,))
             conn.commit()
             
             cursor.execute("SELECT id FROM classes WHERE name = ?", (c_name,))
             class_id = cursor.fetchone()[0]
             
-            # Step 2: Clear old records for clean replacement
+            cursor.execute(
+                "DELETE FROM attendance_log WHERE timetable_id IN (SELECT id FROM timetable WHERE class_id = ?)", 
+                (class_id,)
+            )
             cursor.execute("DELETE FROM timetable WHERE class_id = ?", (class_id,))
             cursor.execute("DELETE FROM subject_assignments WHERE class_id = ?", (class_id,))
             
-            # Step 3: Seed teacher matrix mappings for this specific class
             for sub, tsc in base_assignments:
                 cursor.execute(
                     "INSERT OR REPLACE INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (?, ?, ?)",
                     (class_id, sub, tsc)
                 )
             
-            # Step 4: Pick appropriate template map based on class style type
             if "Stem" in c_name or "S" in c_name or "M" in c_name and c_name != "3M" and c_name != "4M":
                 active_template = science_day_template
             else:
                 active_template = social_day_template
                 
-            # Alternative layout split for M-streams just to make data diverse
             if "M" in c_name:
                 active_template = social_day_template
                 
-            # Step 5: Seed all 50 slots (10 lessons x 5 weekdays) for this class
             for day in weekdays:
                 subjects = active_template[day]
                 for index, sub_name in enumerate(subjects):
                     lesson_number = index + 1
                     cursor.execute(
-                        """INSERT OR REPLACE INTO timetable (class_id, day_of_week, lesson_number, subject) 
+                        """INSERT INTO timetable (class_id, day_of_week, lesson_number, subject) 
                            VALUES (?, ?, ?, ?)""", 
                         (class_id, day, lesson_number, sub_name)
                     )
                     total_slots_inserted += 1
                     
         conn.commit()
-        st.success(f"Successfully processed all 6 classes! Deployed {total_slots_inserted} clean entries into the 10-period matrix layout.")
+        st.success(f"Successfully processed all 6 classes! Deployed {total_slots_inserted} clean entries into the 10-period matrix layout without integrity issues.")
 
 # --- VIEW 4: PRINT ENGINE AND EXPORT VIEW ---
 elif menu == "Print & Export Sheets":
-    st.subheader("🖨️ Generate Official Registers for Endorsement")
+    st.subheader("🖨️ Generate Official Registers & Performance Analysis")
     
     cursor.execute("SELECT name FROM classes ORDER BY name")
     classes_list = [r[0] for r in cursor.fetchall()]
@@ -336,13 +331,48 @@ elif menu == "Print & Export Sheets":
     if not classes_list:
         st.info("No school classes discovered to export sheets from.")
     else:
-        exp_class = st.selectbox("Select Target Class", classes_list, key="exp_class")
-        exp_date = st.date_input("Select Target Date", datetime.date.today(), key="exp_date")
+        col_c, col_d = st.columns(2)
+        with col_c:
+            exp_class = st.selectbox("Select Target Class", classes_list, key="exp_class")
+        with col_d:
+            exp_date = st.date_input("Select Target Date", datetime.date.today(), key="exp_date")
         
         date_str = exp_date.strftime("%Y-%m-%d")
         day_name = exp_date.strftime("%A")
         
-        if st.button("Generate Official TLAR 10-Lesson PDF Document"):
+        st.markdown("---")
+        st.markdown(f"### 📋 Dashboard Preview for {exp_class} — {date_str} ({day_name})")
+        
+        # Pull Teacher Summary Metrics specifically for this class and date
+        cursor.execute(
+            """SELECT 
+                    tea.name AS teacher_name,
+                    SUM(CASE WHEN COALESCE(a.status, 'N/A') = 'Present' THEN 1 ELSE 0 END) AS classes_attended,
+                    SUM(CASE WHEN COALESCE(a.status, 'N/A') = 'Absent' AND COALESCE(a.reason_absent, '') != '' THEN 1 ELSE 0 END) AS missed_with_permission,
+                    SUM(CASE WHEN COALESCE(a.status, 'N/A') = 'Absent' AND COALESCE(a.reason_absent, '') = '' THEN 1 ELSE 0 END) AS missed_without_permission
+               FROM timetable t
+               JOIN classes c ON t.class_id = c.id
+               JOIN subject_assignments sa ON c.id = sa.class_id AND t.subject = sa.subject_name
+               JOIN teachers tea ON sa.teacher_tsc = tea.tsc_no
+               LEFT JOIN attendance_log a ON t.id = a.timetable_id AND a.date = ?
+               WHERE c.name = ? AND t.day_of_week = ?
+               GROUP BY tea.tsc_no
+               ORDER BY tea.name""",
+            (date_str, exp_class, day_name)
+        )
+        teacher_metrics = cursor.fetchall()
+        
+        if teacher_metrics:
+            import pandas as pd
+            st.markdown("**Teacher Daily Evaluation Summary**")
+            df_metrics = pd.DataFrame(teacher_metrics, columns=["Teacher Name", "Classes Attended", "Missed (With Permission)", "Missed (Without Permission)"])
+            st.dataframe(df_metrics, use_container_width=True, hide_index=True)
+        else:
+            st.info("No active teacher lessons logged for this date layout yet.")
+            
+        st.write(" ")
+        
+        if st.button("Generate Official TLAR 10-Lesson PDF Document", type="primary", use_container_width=True):
             cursor.execute(
                 """SELECT t.lesson_number, t.subject, tea.name, COALESCE(a.status, 'N/A'), 
                           COALESCE(a.time_in, ''), COALESCE(a.time_out, ''), COALESCE(a.assignment_given, ''), COALESCE(a.reason_absent, '')
@@ -358,7 +388,7 @@ elif menu == "Print & Export Sheets":
             records = cursor.fetchall()
             
             if not records:
-                st.error(f"No scheduled records discovered for {exp_class} on {day_name} ({date_str}). Ensure master setup data is populated.")
+                st.error(f"No scheduled records discovered for {exp_class} on {day_name} ({date_str}).")
             else:
                 filename = f"TLAR_{exp_class}_{date_str}.pdf".replace(" ", "_")
                 
@@ -366,7 +396,8 @@ elif menu == "Print & Export Sheets":
                 story = []
                 styles = getSampleStyleSheet()
                 
-                title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=13, leading=15, alignment=1, textColor=colors.HexColor("#1A237E"))
+                title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=12, leading=14, alignment=1, textColor=colors.HexColor("#1A237E"))
+                section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=10, leading=12, spaceBefore=12, spaceAfter=6, textColor=colors.HexColor("#1A237E"))
                 meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=9, leading=13)
                 
                 story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
@@ -380,28 +411,50 @@ elif menu == "Print & Export Sheets":
                 meta_table = Table(meta_text, colWidths=[280, 280])
                 meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 4)]))
                 story.append(meta_table)
-                story.append(Spacer(1, 10))
                 
+                # SECTION A: LESSONS RECORD LOG
+                story.append(Paragraph("<b>SECTION A: DAILY LESSON ATTENDANCE REGISTER</b>", section_style))
                 table_data = [["Period", "Subject Matter", "Assigned Teacher", "Status", "In", "Out", "Assg", "Remarks / Reasons"]]
                 for r in records:
                     t_name = r[2] if r[2] else "N/A"
                     table_data.append([f"P{r[0]}", r[1], t_name, r[3], r[4], r[5], r[6], r[7]])
                     
-                attendance_table = Table(table_data, colWidths=[40, 85, 115, 50, 45, 45, 40, 140])
+                attendance_table = Table(table_data, colWidths=[40, 85, 115, 50, 45, 45, 40, 145])
                 attendance_table.setStyle(TableStyle([
                     ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#EEEEEE")),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                     ('ALIGN', (1,1), (2,-1), 'LEFT'),
                     ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0,0), (-1,-1), 8.5),
+                    ('FONTSIZE', (0,0), (-1,-1), 8),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                    ('TOPPADDING', (0,0), (-1,-1), 3),
+                    ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+                ]))
+                story.append(attendance_table)
+                
+                # SECTION B: TEACHER AGGREGATED METRICS
+                story.append(Paragraph("<b>SECTION B: TEACHER EVALUATION SUMMARY EXTRACTION</b>", section_style))
+                
+                summary_headers = [["Teacher Instructor", "Lessons Attended", "Missed (With Permission)", "Missed (Without Permission)"]]
+                for metric in teacher_metrics:
+                    summary_headers.append([metric[0], str(metric[1]), str(metric[2]), str(metric[3])])
+                    
+                summary_table = Table(summary_headers, colWidths=[200, 110, 125, 125])
+                summary_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#E0F2F1")),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                    ('ALIGN', (0,1), (0,-1), 'LEFT'),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0,0), (-1,-1), 8),
                     ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
                     ('TOPPADDING', (0,0), (-1,-1), 4),
                     ('BOTTOMPADDING', (0,0), (-1,-1), 4),
                 ]))
-                story.append(attendance_table)
-                story.append(Spacer(1, 15))
+                story.append(summary_table)
+                story.append(Spacer(1, 10))
                 
-                sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=8.5, leading=13)
+                # AUTHORIZATION FOOTER
+                sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=8, leading=12)
                 sig_text = [
                     [Paragraph("<b>Compiled By:</b> Class Secretary/Monitor<br/><br/>Sign: _______________________", sig_style),
                      Paragraph("<b>Verified By:</b> Deputy Head of Institution<br/><br/>Sign: _______________________", sig_style)],
@@ -418,7 +471,7 @@ elif menu == "Print & Export Sheets":
                 
                 with open(filename, "rb") as pdf_file:
                     st.download_button(
-                        label="📥 Download Official 10-Period PDF Report",
+                        label="📥 Download Updated Official PDF Report With Teacher Summaries",
                         data=pdf_file,
                         file_name=filename,
                         mime="application/pdf",
