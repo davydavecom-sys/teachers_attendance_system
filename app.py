@@ -3,8 +3,8 @@ import sqlite3
 import os
 import datetime
 
-# ReportLab imports for generating clean physical weekly documents
-from reportlab.lib.pagesizes import letter
+# ReportLab imports optimized for native landscape documents
+from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
@@ -418,7 +418,8 @@ elif menu == "Print & Export Sheets":
         if st.button("Generate Official Two-Page W-TLAR PDF", type="primary", use_container_width=True):
             filename = f"Weekly_2Page_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
             
-            doc = SimpleDocTemplate(filename, pagesize=(792, 612), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+            # Use standard Landscape layout orientation mapping explicitly
+            doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
             story = []
             styles = getSampleStyleSheet()
             
@@ -566,3 +567,4 @@ elif menu == "Print & Export Sheets":
                     mime="application/pdf",
                     use_container_width=True
                 )
+                
