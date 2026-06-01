@@ -1,53 +1,53 @@
 import streamlit as st
-import sqlite3
+import psycopg2
+from psycopg2 import extras
 import os
 import datetime
 
-# ReportLab imports optimized for native landscape documents
+# ReportLab imports for generating clean physical weekly documents
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 # ---------------------------------------------------------
-# DATABASE STRUCTURAL INITIALIZATION
+# DATABASE STRUCTURAL INITIALIZATION (SUPABASE / POSTGRES)
 # ---------------------------------------------------------
 def init_database():
-    conn = sqlite3.connect("tlar_school.db", check_same_thread=False)
+    # Fetch connection URI from Streamlit secrets or environment variables safely
+    db_url = st.secrets["SUPABASE_DB_URL"]
+    conn = psycopg2.connect(db_url)
     cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;")
     
-    cursor.execute("CREATE TABLE IF NOT EXISTS teachers (tsc_no TEXT PRIMARY KEY, name TEXT NOT NULL)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS classes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)")
+    # Create Tables using standard PostgreSQL syntax (SERIAL handles autoincrement sequence)
+    cursor.execute("CREATE TABLE IF NOT EXISTS teachers (tsc_no TEXT PRIMARY KEY, name TEXT NOT NULL);")
+    cursor.execute("CREATE TABLE IF NOT EXISTS classes (id SERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE);")
     
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS subject_assignments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            class_id INTEGER,
+            id SERIAL PRIMARY KEY,
+            class_id INTEGER REFERENCES classes(id) ON DELETE CASCADE,
             subject_name TEXT,
-            teacher_tsc TEXT,
-            FOREIGN KEY(class_id) REFERENCES classes(id),
-            FOREIGN KEY(teacher_tsc) REFERENCES teachers(tsc_no),
+            teacher_tsc TEXT REFERENCES teachers(tsc_no) ON DELETE SET NULL,
             UNIQUE(class_id, subject_name)
-        )"""
+        );"""
     )
     
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS timetable (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            class_id INTEGER, 
+            id SERIAL PRIMARY KEY, 
+            class_id INTEGER REFERENCES classes(id) ON DELETE CASCADE, 
             day_of_week TEXT, 
             lesson_number INTEGER, 
             subject TEXT,
-            FOREIGN KEY(class_id) REFERENCES classes(id),
             UNIQUE(class_id, day_of_week, lesson_number)
-        )"""
+        );"""
     )
     
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS attendance_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            timetable_id INTEGER, 
+            id SERIAL PRIMARY KEY, 
+            timetable_id INTEGER REFERENCES timetable(id) ON DELETE CASCADE, 
             date TEXT, 
             subject_name TEXT,
             time_in TEXT, 
@@ -55,9 +55,8 @@ def init_database():
             assignment_given TEXT, 
             status TEXT, 
             reason_absent TEXT,
-            FOREIGN KEY(timetable_id) REFERENCES timetable(id),
             UNIQUE(timetable_id, date, subject_name)
-        )"""
+        );"""
     )
     conn.commit()
     return conn, cursor
@@ -100,7 +99,7 @@ if menu == "Attendance Log":
     st.subheader("📝 Daily Lesson Attendance Logging and Updates")
     st.write("Displaying structured lessons. Elective splits automatically expand below to log teachers individually.")
     
-    cursor.execute("SELECT name FROM classes ORDER BY name")
+    cursor.execute("SELECT name FROM classes ORDER BY name;")
     classes_list = [r[0] for r in cursor.fetchall()]
     
     if not classes_list:
@@ -121,7 +120,7 @@ if menu == "Attendance Log":
             cursor.execute(
                 """SELECT t.id, t.lesson_number, t.subject FROM timetable t
                    JOIN classes c ON t.class_id = c.id 
-                   WHERE c.name = ? AND t.day_of_week = ? ORDER BY t.lesson_number""",
+                   WHERE c.name = %s AND t.day_of_week = %s ORDER BY t.lesson_number;""",
                 (selected_class, day_name)
             )
             slots = cursor.fetchall()
@@ -148,14 +147,14 @@ if menu == "Attendance Log":
                                 """SELECT t.name FROM subject_assignments sa 
                                    JOIN teachers t ON sa.teacher_tsc = t.tsc_no
                                    JOIN classes c ON sa.class_id = c.id
-                                   WHERE c.name = ? AND sa.subject_name = ?""", (selected_class, sub)
+                                   WHERE c.name = %s AND sa.subject_name = %s;""", (selected_class, sub)
                             )
                             t_row = cursor.fetchone()
                             display_teacher = t_row[0] if t_row else "No Instructor Assigned"
                             
                             cursor.execute(
                                 """SELECT time_in, time_out, assignment_given, status, reason_absent 
-                                   FROM attendance_log WHERE timetable_id = ? AND date = ? AND subject_name = ?""", 
+                                   FROM attendance_log WHERE timetable_id = %s AND date = %s AND subject_name = %s;""", 
                                 (tt_id, date_str, sub)
                             )
                             existing = cursor.fetchone()
@@ -188,13 +187,13 @@ if menu == "Attendance Log":
                     for (tt_id, sub), (status, time_in, time_out, assg, reason) in form_payloads.items():
                         cursor.execute(
                             """INSERT INTO attendance_log (timetable_id, date, subject_name, time_in, time_out, assignment_given, status, reason_absent)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                                ON CONFLICT(timetable_id, date, subject_name) DO UPDATE SET
-                                  time_in = excluded.time_in,
-                                  time_out = excluded.time_out,
-                                  assignment_given = excluded.assignment_given,
-                                  status = excluded.status,
-                                  reason_absent = excluded.reason_absent""",
+                                  time_in = EXCLUDED.time_in,
+                                  time_out = EXCLUDED.time_out,
+                                  assignment_given = EXCLUDED.assignment_given,
+                                  status = EXCLUDED.status,
+                                  reason_absent = EXCLUDED.reason_absent;""",
                             (tt_id, date_str, sub, time_in.strip(), time_out.strip(), assg, status, reason.strip())
                         )
                         records_saved += 1
@@ -215,11 +214,12 @@ elif menu == "Teachers & Assignments":
         if st.button("Register Teacher"):
             if new_tsc.strip() and new_name.strip():
                 try:
-                    cursor.execute("INSERT INTO teachers (tsc_no, name) VALUES (?, ?)", (new_tsc.strip(), new_name.strip()))
+                    cursor.execute("INSERT INTO teachers (tsc_no, name) VALUES (%s, %s);", (new_tsc.strip(), new_name.strip()))
                     conn.commit()
                     st.success(f"Registered {new_name}")
                     st.rerun()
-                except sqlite3.IntegrityError:
+                except psycopg2.IntegrityError:
+                    conn.rollback()
                     st.error("Registration Conflict: Code already exists.")
             else:
                 st.warning("Please fill out all fields.")
@@ -227,9 +227,9 @@ elif menu == "Teachers & Assignments":
         st.markdown("---")
         st.markdown("#### Assign Subject Teacher Role")
         
-        cursor.execute("SELECT id, name FROM classes ORDER BY name")
+        cursor.execute("SELECT id, name FROM classes ORDER BY name;")
         classes_mapping = cursor.fetchall()
-        cursor.execute("SELECT tsc_no, name FROM teachers ORDER BY name")
+        cursor.execute("SELECT tsc_no, name FROM teachers ORDER BY name;")
         teachers_mapping = cursor.fetchall()
         
         if classes_mapping and teachers_mapping:
@@ -242,8 +242,8 @@ elif menu == "Teachers & Assignments":
             
             if st.button("Commit Subject Assignment", type="primary"):
                 cursor.execute(
-                    """INSERT INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (?, ?, ?)
-                       ON CONFLICT(class_id, subject_name) DO UPDATE SET teacher_tsc = excluded.teacher_tsc""",
+                    """INSERT INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (%s, %s, %s)
+                       ON CONFLICT(class_id, subject_name) DO UPDATE SET teacher_tsc = EXCLUDED.teacher_tsc;""",
                     (c_options[assign_class], assign_sub, t_options[assign_tea])
                 )
                 conn.commit()
@@ -255,7 +255,7 @@ elif menu == "Teachers & Assignments":
         cursor.execute(
             """SELECT c.name, sa.subject_name, t.name FROM subject_assignments sa
                JOIN classes c ON sa.class_id = c.id JOIN teachers t ON sa.teacher_tsc = t.tsc_no
-               ORDER BY c.name, sa.subject_name"""
+               ORDER BY c.name, sa.subject_name;"""
         )
         matrix_data = cursor.fetchall()
         if matrix_data:
@@ -277,7 +277,10 @@ elif menu == "System Data Importer":
             ("T.18", "LEAH CHEPCHIRCHIR"), ("T.19", "DAISY")
         ]
         for short_code, name in teachers_list:
-            cursor.execute("INSERT OR REPLACE INTO teachers (tsc_no, name) VALUES (?, ?)", (short_code, name))
+            cursor.execute(
+                """INSERT INTO teachers (tsc_no, name) VALUES (%s, %s)
+                   ON CONFLICT (tsc_no) DO UPDATE SET name = EXCLUDED.name;""", (short_code, name)
+            )
         conn.commit()
         st.success("Master Roster records synchronization safely completed.")
         
@@ -341,24 +344,24 @@ elif menu == "System Data Importer":
         
         total_slots_inserted = 0
         for c_name in target_classes:
-            cursor.execute("INSERT OR IGNORE INTO classes (name) VALUES (?)", (c_name,))
+            cursor.execute("INSERT INTO classes (name) VALUES (%s) ON CONFLICT (name) DO NOTHING;", (c_name,))
             conn.commit()
             
-            cursor.execute("SELECT id FROM classes WHERE name = ?", (c_name,))
+            cursor.execute("SELECT id FROM classes WHERE name = %s;", (c_name,))
             class_id = cursor.fetchone()[0]
             
-            cursor.execute("DELETE FROM attendance_log WHERE timetable_id IN (SELECT id FROM timetable WHERE class_id = ?)", (class_id,))
-            cursor.execute("DELETE FROM timetable WHERE class_id = ?", (class_id,))
-            cursor.execute("DELETE FROM subject_assignments WHERE class_id = ?", (class_id,))
+            cursor.execute("DELETE FROM attendance_log WHERE timetable_id IN (SELECT id FROM timetable WHERE class_id = %s);", (class_id,))
+            cursor.execute("DELETE FROM timetable WHERE class_id = %s;", (class_id,))
+            cursor.execute("DELETE FROM subject_assignments WHERE class_id = %s;", (class_id,))
             
             for sub, tsc in teacher_fallbacks:
-                cursor.execute("INSERT OR REPLACE INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (?, ?, ?)", (class_id, sub, tsc))
+                cursor.execute("INSERT INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (%s, %s, %s);", (class_id, sub, tsc))
             
             class_grid = master_grids.get(c_name, master_grids["10 Stem"])
             for day in WEEKDAYS:
                 lessons = class_grid[day]
                 for index, sub_name in enumerate(lessons):
-                    cursor.execute("INSERT INTO timetable (class_id, day_of_week, lesson_number, subject) VALUES (?, ?, ?, ?)", (class_id, day, index + 1, sub_name))
+                    cursor.execute("INSERT INTO timetable (class_id, day_of_week, lesson_number, subject) VALUES (%s, %s, %s, %s);", (class_id, day, index + 1, sub_name))
                     total_slots_inserted += 1
                     
         conn.commit()
@@ -369,7 +372,7 @@ elif menu == "Print & Export Sheets":
     st.subheader("🖨️ Generate Official 2-Page Weekly Registers")
     st.write("This generation profile compresses all data inputs precisely into an official two-page verification format.")
     
-    cursor.execute("SELECT name FROM classes ORDER BY name")
+    cursor.execute("SELECT name FROM classes ORDER BY name;")
     classes_list = [r[0] for r in cursor.fetchall()]
     
     if not classes_list:
@@ -389,6 +392,8 @@ elif menu == "Print & Export Sheets":
         st.markdown(f"### 📋 Weekly Dashboard Preview for **{exp_class}** ({mon_date_str} to {fri_date_str})")
         
         date_placeholders = list(week_dates.values())
+        
+        # Postgres adjusted evaluation query
         cursor.execute(
             f"""SELECT 
                     tea.name AS teacher_name,
@@ -398,14 +403,14 @@ elif menu == "Print & Export Sheets":
                     COUNT(CASE WHEN a.status = 'Recovered' THEN 1 END) AS classes_recovered
                FROM teachers tea
                LEFT JOIN subject_assignments sa ON tea.tsc_no = sa.teacher_tsc
-               LEFT JOIN classes c ON sa.class_id = c.id AND c.name = ?
+               LEFT JOIN classes c ON sa.class_id = c.id AND c.name = %s
                LEFT JOIN timetable t ON c.id = t.class_id
                LEFT JOIN attendance_log a ON t.id = a.timetable_id 
                     AND a.subject_name = sa.subject_name 
-                    AND a.date IN ({','.join(['?']*5)})
-               GROUP BY tea.tsc_no
-               ORDER BY tea.name""",
-            (exp_class, *date_placeholders)
+                    AND a.date IN (%s, %s, %s, %s, %s)
+               GROUP BY tea.tsc_no, tea.name
+               ORDER BY tea.name;""",
+            [exp_class] + date_placeholders
         )
         weekly_teacher_metrics = cursor.fetchall()
         
@@ -418,7 +423,7 @@ elif menu == "Print & Export Sheets":
         if st.button("Generate Official Two-Page W-TLAR PDF", type="primary", use_container_width=True):
             filename = f"Weekly_2Page_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
             
-            # Use standard Landscape layout orientation mapping explicitly
+            # Explicit Landscape setup targeting printers natively
             doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
             story = []
             styles = getSampleStyleSheet()
@@ -457,7 +462,7 @@ elif menu == "Print & Export Sheets":
                     cursor.execute(
                         """SELECT t.id, t.subject FROM timetable t
                            JOIN classes c ON t.class_id = c.id
-                           WHERE c.name = ? AND t.day_of_week = ? AND t.lesson_number = ?""",
+                           WHERE c.name = %s AND t.day_of_week = %s AND t.lesson_number = %s;""",
                         (exp_class, day, l_num)
                     )
                     t_slot = cursor.fetchone()
@@ -472,7 +477,7 @@ elif menu == "Print & Export Sheets":
                         for sub in active_subs:
                             cursor.execute(
                                 """SELECT status, time_in, time_out, assignment_given FROM attendance_log 
-                                   WHERE timetable_id = ? AND date = ? AND subject_name = ?""",
+                                   WHERE timetable_id = %s AND date = %s AND subject_name = %s;""",
                                 (tt_id, d_str, sub)
                             )
                             log_row = cursor.fetchone()
@@ -567,4 +572,3 @@ elif menu == "Print & Export Sheets":
                     mime="application/pdf",
                     use_container_width=True
                 )
-                
