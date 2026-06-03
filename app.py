@@ -4,7 +4,7 @@ from psycopg2 import extras
 import os
 import datetime
 
-# ReportLab imports for generating clean physical weekly documents
+# ReportLab layout engine imports optimized for native landscape outputs
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -14,12 +14,17 @@ from reportlab.lib import colors
 # DATABASE STRUCTURAL INITIALIZATION (SUPABASE / POSTGRES)
 # ---------------------------------------------------------
 def init_database():
-    # Fetch connection URI from Streamlit secrets or environment variables safely
-    db_url = st.secrets["SUPABASE_DB_URL"]
+    db_url = os.environ.get("SUPABASE_DB_URL")
+    if not db_url and "SUPABASE_DB_URL" in st.secrets:
+        db_url = st.secrets["SUPABASE_DB_URL"]
+        
+    if not db_url:
+        st.error("❌ Critical: SUPABASE_DB_URL connection credentials string missing.")
+        st.stop()
+        
     conn = psycopg2.connect(db_url)
     cursor = conn.cursor()
     
-    # Create Tables using standard PostgreSQL syntax (SERIAL handles autoincrement sequence)
     cursor.execute("CREATE TABLE IF NOT EXISTS teachers (tsc_no TEXT PRIMARY KEY, name TEXT NOT NULL);")
     cursor.execute("CREATE TABLE IF NOT EXISTS classes (id SERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE);")
     
@@ -63,6 +68,9 @@ def init_database():
 
 conn, cursor = init_database()
 
+# Complete list of rest structures to filter out from attendance registers
+REST_BLOCKS = {"BREAK", "LUNCH", "FREE", "TEA BREAK", "TEA", "PPI", "B.P", "G.S"}
+
 ELECTIVE_SPLITS = {
     "HIST/COMP/AGR": ["HISTO", "COMP", "AGRIC"],
     "CRE CSL": ["CRE", "CSL"],
@@ -97,13 +105,13 @@ menu = st.sidebar.radio("Navigation Menu", ["Attendance Log", "Teachers & Assign
 # --- VIEW 1: ATTENDANCE LOG VIEW ---
 if menu == "Attendance Log":
     st.subheader("📝 Daily Lesson Attendance Logging and Updates")
-    st.write("Displaying structured lessons. Elective splits automatically expand below to log teachers individually.")
+    st.write("Displaying valid instructional lessons. Non-lesson rest blocks are automatically filtered out.")
     
     cursor.execute("SELECT name FROM classes ORDER BY name;")
     classes_list = [r[0] for r in cursor.fetchall()]
     
     if not classes_list:
-        st.info("No classes found. Go to the 'System Data Importer' tab to set up default school structures.")
+        st.info("No classes found. Go to 'System Data Importer' to set up default school structures.")
     else:
         col1, col2 = st.columns(2)
         with col1:
@@ -115,7 +123,7 @@ if menu == "Attendance Log":
         date_str = selected_date.strftime("%Y-%m-%d")
         
         if day_name in ["Saturday", "Sunday"]:
-            st.error(f"⚠️ Selected date falls on a weekend ({day_name}). Official registers are maintained Monday through Friday.")
+            st.error(f"⚠️ Selected date falls on a weekend ({day_name}). Register tracking runs Monday to Friday.")
         else:
             cursor.execute(
                 """SELECT t.id, t.lesson_number, t.subject FROM timetable t
@@ -130,16 +138,19 @@ if menu == "Attendance Log":
             else:
                 st.write(f"### Grid View for {day_name}, {date_str}")
                 form_payloads = {}
+                academic_lesson_index = 1
                 
-                for (tt_id, lesson_num, raw_subject) in slots:
+                for (tt_id, original_num, raw_subject) in slots:
+                    # Filter out rest intervals dynamically from the registry tracking view
+                    if raw_subject.strip().upper() in REST_BLOCKS:
+                        continue
+                        
                     active_subjects = ELECTIVE_SPLITS.get(raw_subject, [raw_subject])
                     is_split = len(active_subjects) > 1
                     
-                    header_label = f"⏰ Lesson {lesson_num}: {raw_subject}"
-                    if raw_subject in ["BREAK", "LUNCH", "FREE", "TEA BREAK"]:
-                        header_label = f"☕ {raw_subject} — (Rest Block — Lesson {lesson_num})"
-                    elif is_split:
-                        header_label = f"🔀 Lesson {lesson_num}: {raw_subject} — [Parallel Elective Split Group]"
+                    header_label = f"📖 Academic Lesson {academic_lesson_index}: {raw_subject}"
+                    if is_split:
+                        header_label = f"🔀 Academic Lesson {academic_lesson_index}: {raw_subject} — [Parallel Elective Split Group]"
                         
                     with st.expander(header_label, expanded=True):
                         for sub in active_subjects:
@@ -181,6 +192,8 @@ if menu == "Attendance Log":
                             form_payloads[(tt_id, sub)] = (status, time_in, time_out, assg, reason)
                             if is_split:
                                 st.markdown("---")
+                    
+                    academic_lesson_index += 1
                                 
                 if st.button("Save / Update Day's Lesson Entries", type="primary"):
                     records_saved = 0
@@ -198,7 +211,7 @@ if menu == "Attendance Log":
                         )
                         records_saved += 1
                     conn.commit()
-                    st.success(f"Successfully synchronized {records_saved} lesson tracks for {date_str}!")
+                    st.success(f"Successfully synchronized {records_saved} instructional tracks for {date_str}!")
                     st.rerun()
 
 # --- VIEW 2: TEACHERS & ASSIGNMENTS PANEL ---
@@ -266,7 +279,7 @@ elif menu == "Teachers & Assignments":
 # --- VIEW 3: AUTOMATED DATA IMPORTER ---
 elif menu == "System Data Importer":
     st.subheader("⚙️ Automated System Structural Setup Panel")
-    st.write("Inject verified schedules containing composite standard elective blocks from Timetable.pdf.")
+    st.write("Inject clean schedules containing composite standard elective blocks from Master Timetable profiles.")
     
     if st.button("Import School Staff Roster (Teacher numbers list)", use_container_width=True):
         teachers_list = [
@@ -286,7 +299,7 @@ elif menu == "System Data Importer":
         
     st.write(" ")
     
-    if st.button("Import Complete 10-Lesson Multi-Class Timetable Grid", use_container_width=True):
+    if st.button("Import Complete Multi-Class Timetable Grid", use_container_width=True):
         target_classes = ["4M", "4S", "3M", "3S", "10 Social Science", "10 Stem"]
         
         master_grids = {
@@ -365,12 +378,12 @@ elif menu == "System Data Importer":
                     total_slots_inserted += 1
                     
         conn.commit()
-        st.success(f"Successfully processed all school grids! Deployed {total_slots_inserted} lesson entries securely.")
+        st.success(f"Successfully processed all school grids! Deployed {total_slots_inserted} entries securely.")
 
 # --- VIEW 4: PRINT ENGINE AND EXPORT VIEW (STRICT TWO-PAGE REPORT ENGINE) ---
 elif menu == "Print & Export Sheets":
     st.subheader("🖨️ Generate Official 2-Page Weekly Registers")
-    st.write("This generation profile compresses all data inputs precisely into an official two-page verification format.")
+    st.write("This profile dynamically packs exactly 10 academic lessons into an optimized, highly-legible layout.")
     
     cursor.execute("SELECT name FROM classes ORDER BY name;")
     classes_list = [r[0] for r in cursor.fetchall()]
@@ -393,7 +406,6 @@ elif menu == "Print & Export Sheets":
         
         date_placeholders = list(week_dates.values())
         
-        # Postgres adjusted evaluation query
         cursor.execute(
             f"""SELECT 
                     tea.name AS teacher_name,
@@ -423,30 +435,31 @@ elif menu == "Print & Export Sheets":
         if st.button("Generate Official Two-Page W-TLAR PDF", type="primary", use_container_width=True):
             filename = f"Weekly_2Page_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
             
-            # Explicit Landscape setup targeting printers natively
-            doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+            # Explicit Landscape setup targeting physical printer drivers
+            doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=18, leftMargin=18, topMargin=18, bottomMargin=18)
             story = []
             styles = getSampleStyleSheet()
             
-            title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=11, leading=13, alignment=1, textColor=colors.HexColor("#1A237E"))
-            section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=9, leading=11, spaceBefore=4, spaceAfter=3, textColor=colors.HexColor("#1A237E"))
-            meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=8, leading=10)
-            grid_text_style = ParagraphStyle('GridText', parent=styles['Normal'], fontSize=6, leading=8, alignment=0)
-            summary_text_style = ParagraphStyle('SummaryText', parent=styles['Normal'], fontSize=7, leading=9)
+            # Enhanced typography sizing and matching vertical line heights (leading) to prevent overlapping
+            title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=13, leading=16, alignment=1, textColor=colors.HexColor("#1A237E"))
+            section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=10.5, leading=14, spaceBefore=6, spaceAfter=4, textColor=colors.HexColor("#1A237E"))
+            meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=9.5, leading=13)
+            grid_text_style = ParagraphStyle('GridText', parent=styles['Normal'], fontSize=7.5, leading=10.5, alignment=0)
+            summary_text_style = ParagraphStyle('SummaryText', parent=styles['Normal'], fontSize=8.5, leading=12)
             
             # -----------------------------------------------------------------
-            # PAGE 1: TITLE META AND SECTION A ATTENDANCE LOG GRID
+            # PAGE 1: TITLE META AND SECTION A ATTENDANCE LOG GRID (10 LESSONS)
             # -----------------------------------------------------------------
             story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
             story.append(Paragraph("<b>WEEKLY TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
-            story.append(Spacer(1, 4))
+            story.append(Spacer(1, 5))
             
             meta_text = [
-                [Paragraph(f"<b>Institution/Campus:</b> St. Michael Senior School - Kipsombe", meta_style), Paragraph("<b>Form Reference:</b> TSC/QAS/TPAD/W-TLAR/2026/V4", meta_style)],
-                [Paragraph(f"<b>Class / Stream Group:</b> {exp_class}", meta_style), Paragraph(f"<b>Weekly Log Period:</b> {mon_date_str} to {fri_date_str}", meta_style)]
+                [Paragraph(f"<b>Institution:</b> St. Michael Senior School - Kipsombe", meta_style), Paragraph("<b>Form Ref:</b> TSC/QAS/TPAD/W-TLAR/2026/V4", meta_style)],
+                [Paragraph(f"<b>Class Stream:</b> {exp_class}", meta_style), Paragraph(f"<b>Log Period:</b> {mon_date_str} to {fri_date_str}", meta_style)]
             ]
-            meta_table = Table(meta_text, colWidths=[376, 376])
-            meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 1)]))
+            meta_table = Table(meta_text, colWidths=[380, 380])
+            meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
             story.append(meta_table)
             
             story.append(Paragraph("<b>SECTION A: WEEKLY LESSON TRACKING MATRIX WITH VERIFIED TRACK TIMINGS</b>", section_style))
@@ -454,23 +467,28 @@ elif menu == "Print & Export Sheets":
             grid_headers = ["Lesson Slot", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
             grid_data = [grid_headers]
             
+            # Generate exactly 10 pure teaching lines on the final PDF document
             for l_num in range(1, 11):
                 row_cells = [f"Lesson {l_num}"]
                 for day in WEEKDAYS:
                     d_str = week_dates[day]
                     
+                    # Fetch all rows for the current day to filter rest gaps programmatically
                     cursor.execute(
                         """SELECT t.id, t.subject FROM timetable t
                            JOIN classes c ON t.class_id = c.id
-                           WHERE c.name = %s AND t.day_of_week = %s AND t.lesson_number = %s;""",
-                        (exp_class, day, l_num)
+                           WHERE c.name = %s AND t.day_of_week = %s ORDER BY t.lesson_number;""",
+                        (exp_class, day)
                     )
-                    t_slot = cursor.fetchone()
+                    all_day_slots = cursor.fetchall()
                     
-                    if not t_slot:
-                        row_cells.append(Paragraph("<font color='grey'>- Rest Break -</font>", grid_text_style))
+                    # Filter out rest frames to locate our true target lesson index matches
+                    academic_slots = [slot for slot in all_day_slots if slot[1].strip().upper() not in REST_BLOCKS]
+                    
+                    if len(academic_slots) < l_num:
+                        row_cells.append(Paragraph("<font color='grey'>No Lesson</font>", grid_text_style))
                     else:
-                        tt_id, raw_sub = t_slot
+                        tt_id, raw_sub = academic_slots[l_num - 1]
                         active_subs = ELECTIVE_SPLITS.get(raw_sub, [raw_sub])
                         
                         status_flags = []
@@ -486,37 +504,36 @@ elif menu == "Print & Export Sheets":
                                 status_val, ti, to, asg = log_row
                                 ti_str = ti if ti.strip() else "--:--"
                                 to_str = to if to.strip() else "--:--"
-                                status_flags.append(f"<b>{sub}</b>: {status_val} | ⏱️ {ti_str}-{to_str} | 📝 Asg: {asg}")
+                                status_flags.append(f"<b>{sub}</b>: {status_val}<br/>⏱️ {ti_str}-{to_str} | 📝 Asg: {asg}")
                             else:
-                                status_flags.append(f"<b>{sub}</b>: Unmarked | ⏱️ --:-- | 📝 Asg: No")
+                                status_flags.append(f"<b>{sub}</b>: Unmarked<br/>⏱️ --:-- | 📝 Asg: No")
                                 
                         cell_markup = "<br/>".join(status_flags)
                         row_cells.append(Paragraph(cell_markup, grid_text_style))
                         
                 grid_data.append(row_cells)
                 
-            matrix_table = Table(grid_data, colWidths=[65, 137, 137, 137, 137, 137])
+            matrix_table = Table(grid_data, colWidths=[65, 139, 139, 139, 139, 139])
             matrix_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#EEEEEE")),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ('ALIGN', (1,1), (-1,-1), 'LEFT'),
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,-1), 6),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('TOPPADDING', (0,0), (-1,-1), 2),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+                ('TOPPADDING', (0,0), (-1,-1), 4),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
             ]))
             story.append(matrix_table)
             
             story.append(PageBreak())
             
             # -----------------------------------------------------------------
-            # PAGE 2: TITLE META AND SECTION B STAFF SUMMARY MATRIX WITH SIGNATURES
+            # PAGE 2: STAFF SUMMARY REGISTER WITH ENHANCED FONT SIZES
             # -----------------------------------------------------------------
             story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
             story.append(Paragraph("<b>WEEKLY TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
-            story.append(Spacer(1, 4))
+            story.append(Spacer(1, 5))
             story.append(meta_table) 
             
             story.append(Paragraph("<b>SECTION B: CUMULATIVE MASTER TEACHER PERFORMANCE SUMMARY REGISTER (ALL STAFF)</b>", section_style))
@@ -538,19 +555,19 @@ elif menu == "Print & Export Sheets":
                     Paragraph(str(metric[4]), summary_text_style)
                 ])
                 
-            summary_table = Table(summary_headers, colWidths=[272, 120, 120, 120, 120])
+            summary_table = Table(summary_headers, colWidths=[280, 120, 120, 120, 120])
             summary_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#E0F2F1")),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('TOPPADDING', (0,0), (-1,-1), 1.5),  
-                ('BOTTOMPADDING', (0,0), (-1,-1), 1.5),
+                ('TOPPADDING', (0,0), (-1,-1), 3),  
+                ('BOTTOMPADDING', (0,0), (-1,-1), 3),
             ]))
             story.append(summary_table)
-            story.append(Spacer(1, 6))
+            story.append(Spacer(1, 8))
             
-            sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=7.5, leading=10)
+            sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=8.5, leading=12)
             sig_text = [
                 [Paragraph("<b>Compiled By:</b> Class Secretary Monitor<br/>Sign: _______________________", sig_style),
                  Paragraph("<b>Verified By:</b> Deputy Head of Institution<br/>Sign: _______________________", sig_style)],
@@ -558,8 +575,8 @@ elif menu == "Print & Export Sheets":
                 [Paragraph("<br/><b>Confirmed By:</b> Head of Institution<br/>Sign: _______________________<br/>Date: _______________________", sig_style),
                  Paragraph("<br/><b>Official Institution Stamp Check:</b><br/>[ Place Stamp Box Here ]", sig_style)]
             ]
-            sig_table = Table(sig_text, colWidths=[376, 376])
-            sig_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 1)]))
+            sig_table = Table(sig_text, colWidths=[380, 380])
+            sig_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
             story.append(sig_table)
             
             doc.build(story)
