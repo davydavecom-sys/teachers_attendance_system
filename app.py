@@ -68,8 +68,8 @@ def init_database():
 
 conn, cursor = init_database()
 
-# Complete list of rest structures to filter out from attendance registers
-REST_BLOCKS = {"BREAK", "LUNCH", "FREE", "TEA BREAK", "TEA", "PPI", "B.P", "G.S"}
+# Strict filtering tags to ignore non-teachable slots
+REST_BLOCKS = {"BREAK", "LUNCH", "TEA BREAK", "TEA"}
 
 ELECTIVE_SPLITS = {
     "HIST/COMP/AGR": ["HISTO", "COMP", "AGRIC"],
@@ -141,7 +141,6 @@ if menu == "Attendance Log":
                 academic_lesson_index = 1
                 
                 for (tt_id, original_num, raw_subject) in slots:
-                    # Filter out rest intervals dynamically from the registry tracking view
                     if raw_subject.strip().upper() in REST_BLOCKS:
                         continue
                         
@@ -279,7 +278,7 @@ elif menu == "Teachers & Assignments":
 # --- VIEW 3: AUTOMATED DATA IMPORTER ---
 elif menu == "System Data Importer":
     st.subheader("⚙️ Automated System Structural Setup Panel")
-    st.write("Inject clean schedules containing composite standard elective blocks from Master Timetable profiles.")
+    st.write("Inject complete 13-slot schedules. The system will track everything but print only the 10 teachable blocks.")
     
     if st.button("Import School Staff Roster (Teacher numbers list)", use_container_width=True):
         teachers_list = [
@@ -299,51 +298,52 @@ elif menu == "System Data Importer":
         
     st.write(" ")
     
-    if st.button("Import Complete Multi-Class Timetable Grid", use_container_width=True):
+    if st.button("Import Complete 13-Entry Multi-Class Timetable Grid", use_container_width=True):
         target_classes = ["4M", "4S", "3M", "3S", "10 Social Science", "10 Stem"]
         
+        # Expanded grids to match a complete 13-slot physical day profile (10 teachable + 3 breaks)
         master_grids = {
             "10 Stem": {
-                "Monday":    ["MAT", "MAT", "TEA BREAK", "KIS", "BIO", "BREAK", "HIS", "KIS", "LUNCH", "CRE CSL"],
-                "Tuesday":   ["PE", "ENG", "TEA BREAK", "MAT", "MAT", "BREAK", "KIS", "HIS", "LUNCH", "CRE BIO CSL"],
-                "Wednesday": ["MAT", "MAT", "TEA BREAK", "CRE", "ENG", "BREAK", "KIS", "HIS", "LUNCH", "BIO"],
-                "Thursday":  ["MAT", "MAT", "TEA BREAK", "CRE", "ENG", "BREAK", "KIS", "HIS", "LUNCH", "ENG"],
-                "Friday":    ["PE ICT", "PE ICT", "TEA BREAK", "ENG", "KIS", "BREAK", "HIS", "MAT", "LUNCH", "BIO"]
+                "Monday":    ["MAT", "MAT", "TEA BREAK", "KIS", "BIO", "BREAK", "HIS", "KIS", "LUNCH", "CRE CSL", "ENG", "PHY", "CHEM"],
+                "Tuesday":   ["PE", "ENG", "TEA BREAK", "MAT", "MAT", "BREAK", "KIS", "HIS", "LUNCH", "CRE BIO CSL", "BIO", "CHEM", "MAT"],
+                "Wednesday": ["MAT", "MAT", "TEA BREAK", "CRE", "ENG", "BREAK", "KIS", "HIS", "LUNCH", "BIO", "PHY", "CHEM", "MAT"],
+                "Thursday":  ["MAT", "MAT", "TEA BREAK", "CRE", "ENG", "BREAK", "KIS", "HIS", "LUNCH", "ENG", "BIO", "PHY", "CHEM"],
+                "Friday":    ["PE ICT", "PE ICT", "TEA BREAK", "ENG", "KIS", "BREAK", "HIS", "MAT", "LUNCH", "BIO", "PHY", "CHEM", "MAT"]
             },
             "10 Social Science": {
-                "Monday":    ["PPI", "KIS", "TEA BREAK", "CSL", "MAT", "BREAK", "HIS MAT", "GE STO", "LUNCH", "PE"],
-                "Tuesday":   ["GE STO", "CRE", "TEA BREAK", "HIS MAT", "KIS", "BREAK", "ICT", "ENG", "LUNCH", "PE"],
-                "Wednesday": ["GE STO", "KIS", "TEA BREAK", "HIS MAT", "ICT", "BREAK", "ENG", "GE STO", "LUNCH", "PE"],
-                "Thursday":  ["KIS", "ENG", "TEA BREAK", "GE STO", "CSL", "BREAK", "B.P", "B.P", "LUNCH", "G.S"],
-                "Friday":    ["CRE", "ENG", "TEA BREAK", "ENG", "KIS", "BREAK", "B.P", "B.P", "LUNCH", "CSL"]
+                "Monday":    ["PPI", "KIS", "TEA BREAK", "CSL", "MAT", "BREAK", "HIS MAT", "GE STO", "LUNCH", "PE", "ENG", "HIS", "GEO"],
+                "Tuesday":   ["GE STO", "CRE", "TEA BREAK", "HIS MAT", "KIS", "BREAK", "ICT", "ENG", "LUNCH", "PE", "MAT", "HIS", "CSL"],
+                "Wednesday": ["GE STO", "KIS", "TEA BREAK", "HIS MAT", "ICT", "BREAK", "ENG", "GE STO", "LUNCH", "PE", "CRE", "ENG", "MAT"],
+                "Thursday":  ["KIS", "ENG", "TEA BREAK", "GE STO", "CSL", "BREAK", "B.P", "B.P", "LUNCH", "G.S", "MAT", "HIS", "PE"],
+                "Friday":    ["CRE", "ENG", "TEA BREAK", "ENG", "KIS", "BREAK", "B.P", "B.P", "LUNCH", "CSL", "MAT", "GEO", "HIS"]
             },
             "3S": {
-                "Monday":    ["MAT", "MAT", "TEA BREAK", "PHY KIS", "ENG", "BREAK", "HISTO GEO", "HISTO GEO", "LUNCH", "ENG"],
-                "Tuesday":   ["ENG", "CRE", "TEA BREAK", "MAT", "MAT", "BREAK", "LS", "CRE BIO", "LUNCH", "P.E"],
-                "Wednesday": ["MAT", "MAT", "TEA BREAK", "CHEM", "PHY", "BREAK", "CRE", "MAT", "LUNCH", "CHE M"],
-                "Thursday":  ["HISTO GEO", "HISTO GEO", "TEA BREAK", "ENG", "KIS", "BREAK", "ENG", "P.E", "LUNCH", "BIO"],
-                "Friday":    ["ENG", "BIO", "TEA BREAK", "HISTO GEO", "PHY KIS", "BREAK", "BIO", "PHY CRE", "LUNCH", "HISTO GEO"]
+                "Monday":    ["MAT", "MAT", "TEA BREAK", "PHY KIS", "ENG", "BREAK", "HISTO GEO", "HISTO GEO", "LUNCH", "ENG", "BIO", "CHEM", "PHY"],
+                "Tuesday":   ["ENG", "CRE", "TEA BREAK", "MAT", "MAT", "BREAK", "LS", "CRE BIO", "LUNCH", "P.E", "KIS", "HIS", "GEO"],
+                "Wednesday": ["MAT", "MAT", "TEA BREAK", "CHEM", "PHY", "BREAK", "CRE", "MAT", "LUNCH", "CHE M", "ENG", "BIO", "KIS"],
+                "Thursday":  ["HISTO GEO", "HISTO GEO", "TEA BREAK", "ENG", "KIS", "BREAK", "ENG", "P.E", "LUNCH", "BIO", "CHEM", "PHY", "MAT"],
+                "Friday":    ["ENG", "BIO", "TEA BREAK", "HISTO GEO", "PHY KIS", "BREAK", "BIO", "PHY CRE", "LUNCH", "HISTO GEO", "MAT", "CHEM", "ENG"]
             },
             "3M": {
-                "Monday":    ["BIO", "PHY", "TEA BREAK", "MAT", "ENG", "BREAK", "P.E", "CRE", "LUNCH", "ENG"],
-                "Tuesday":   ["BIO", "MAT", "TEA BREAK", "HISTO GEO", "ENG", "BREAK", "CRE", "CHEM", "LUNCH", "PHY"],
-                "Wednesday": ["MAT", "LS", "TEA BREAK", "HISTO GEO", "KIS", "BREAK", "ENG", "PHY", "LUNCH", "CRE"],
-                "Thursday":  ["ENG", "ENG", "TEA BREAK", "HIST/COMP/AGR", "MAT", "BREAK", "MAT", "BIO", "LUNCH", "CHEM"],
-                "Friday":    ["MAT", "ENG", "TEA BREAK", "CHEM", "HIST/COMP/AGR", "BREAK", "BIO", "KIS", "LUNCH", "HISTO GEO"]
+                "Monday":    ["BIO", "PHY", "TEA BREAK", "MAT", "ENG", "BREAK", "P.E", "CRE", "LUNCH", "ENG", "KIS", "CHEM", "BIO"],
+                "Tuesday":   ["BIO", "MAT", "TEA BREAK", "HISTO GEO", "ENG", "BREAK", "CRE", "CHEM", "LUNCH", "PHY", "MAT", "ENG", "KIS"],
+                "Wednesday": ["MAT", "LS", "TEA BREAK", "HISTO GEO", "KIS", "BREAK", "ENG", "PHY", "LUNCH", "CRE", "BIO", "CHEM", "MAT"],
+                "Thursday":  ["ENG", "ENG", "TEA BREAK", "HIST/COMP/AGR", "MAT", "BREAK", "MAT", "BIO", "LUNCH", "CHEM", "PHY", "KIS", "CRE"],
+                "Friday":    ["MAT", "ENG", "TEA BREAK", "CHEM", "HIST/COMP/AGR", "BREAK", "BIO", "KIS", "LUNCH", "HISTO GEO", "ENG", "MAT", "PHY"]
             },
             "4S": {
-                "Monday":    ["HISTO GEO", "CHE M", "TEA BREAK", "CRE", "MAT", "BREAK", "ENG", "KIS", "LUNCH", "PHY"],
-                "Tuesday":   ["MAT", "HISTO GEO", "TEA BREAK", "ST", "LS", "BREAK", "ENG", "KIS", "LUNCH", "BIO"],
-                "Wednesday": ["MAT", "ENG", "TEA BREAK", "PHY", "HS MAT", "BREAK", "BIO", "M CHE", "LUNCH", "BIO"],
-                "Thursday":  ["ENG", "PHY", "TEA BREAK", "HIST/COMP/AGR", "ENG", "BREAK", "CHEM", "KIS", "LUNCH", "CRE"],
-                "Friday":    ["ENG", "KIS", "TEA BREAK", "KIS", "KIS", "BREAK", "P.E", "CRE", "LUNCH", "M CHE"]
+                "Monday":    ["HISTO GEO", "CHE M", "TEA BREAK", "CRE", "MAT", "BREAK", "ENG", "KIS", "LUNCH", "PHY", "BIO", "CHEM", "MAT"],
+                "Tuesday":   ["MAT", "HISTO GEO", "TEA BREAK", "ST", "LS", "BREAK", "ENG", "KIS", "LUNCH", "BIO", "PHY", "CHEM", "ENG"],
+                "Wednesday": ["MAT", "ENG", "TEA BREAK", "PHY", "HS MAT", "BREAK", "BIO", "M CHE", "LUNCH", "BIO", "KIS", "CRE", "HIS"],
+                "Thursday":  ["ENG", "PHY", "TEA BREAK", "HIST/COMP/AGR", "ENG", "BREAK", "CHEM", "KIS", "LUNCH", "CRE", "MAT", "BIO", "PHY"],
+                "Friday":    ["ENG", "KIS", "TEA BREAK", "KIS", "KIS", "BREAK", "P.E", "CRE", "LUNCH", "M CHE", "BIO", "PHY", "CHEM"]
             },
             "4M": {
-                "Monday":    ["HISTO GEO", "MAT", "TEA BREAK", "CRE", "ENG", "BREAK", "BIO", "KIS", "LUNCH", "PHY"],
-                "Tuesday":   ["ENG", "MAT", "TEA BREAK", "PHY", "HISTO GEO", "BREAK", "KIS", "ENG", "LUNCH", "CHEM"],
-                "Wednesday": ["HISTO GEO", "PHY", "TEA BREAK", "MAT", "ENG", "BREAK", "MAT", "P.E", "LUNCH", "BIO"],
-                "Thursday":  ["MAT", "ENG", "TEA BREAK", "HIST/COMP/AGR", "CRE", "BREAK", "MAT", "ENG", "LUNCH", "BIO"],
-                "Friday":    ["ENG", "MAT", "TEA BREAK", "MAT", "ENG", "BREAK", "M CHE", "KIS", "LUNCH", "BIO"]
+                "Monday":    ["HISTO GEO", "MAT", "TEA BREAK", "CRE", "ENG", "BREAK", "BIO", "KIS", "LUNCH", "PHY", "CHEM", "MAT", "ENG"],
+                "Tuesday":   ["ENG", "MAT", "TEA BREAK", "PHY", "HISTO GEO", "BREAK", "KIS", "ENG", "LUNCH", "CHEM", "BIO", "CRE", "MAT"],
+                "Wednesday": ["HISTO GEO", "PHY", "TEA BREAK", "MAT", "ENG", "BREAK", "MAT", "P.E", "LUNCH", "BIO", "CHEM", "KIS", "ENG"],
+                "Thursday":  ["MAT", "ENG", "TEA BREAK", "HIST/COMP/AGR", "CRE", "BREAK", "MAT", "ENG", "LUNCH", "BIO", "PHY", "CHEM", "KIS"],
+                "Friday":    ["ENG", "MAT", "TEA BREAK", "MAT", "ENG", "BREAK", "M CHE", "KIS", "LUNCH", "BIO", "PHY", "CHEM", "CRE"]
             }
         }
         
@@ -352,7 +352,7 @@ elif menu == "System Data Importer":
             ("CHEM", "T.2"), ("PHY", "T.18"), ("CRE", "T.10"), ("HIS", "T.13"),
             ("PE", "T.11"), ("ICT", "T.17"), ("CSL", "T.16"), ("LS", "T.1"),
             ("HISTO GEO", "T.13"), ("GE STO", "T.12"), ("HISTO", "T.5"), 
-            ("COMP", "T.17"), ("AGRIC", "T.1")
+            ("COMP", "T.17"), ("AGRIC", "T.1"), ("PPI", "T.10"), ("B.P", "T.12"), ("G.S", "T.13")
         ]
         
         total_slots_inserted = 0
@@ -378,12 +378,12 @@ elif menu == "System Data Importer":
                     total_slots_inserted += 1
                     
         conn.commit()
-        st.success(f"Successfully processed all school grids! Deployed {total_slots_inserted} entries securely.")
+        st.success(f"Successfully configured 13-slot maps! Deployed {total_slots_inserted} database lines.")
 
 # --- VIEW 4: PRINT ENGINE AND EXPORT VIEW (STRICT TWO-PAGE REPORT ENGINE) ---
 elif menu == "Print & Export Sheets":
     st.subheader("🖨️ Generate Official 2-Page Weekly Registers")
-    st.write("This profile dynamically packs exactly 10 academic lessons into an optimized, highly-legible layout.")
+    st.write("Outputs a strict 2-page grid containing exactly 10 teachable instructional lines with enhanced text size.")
     
     cursor.execute("SELECT name FROM classes ORDER BY name;")
     classes_list = [r[0] for r in cursor.fetchall()]
@@ -435,31 +435,31 @@ elif menu == "Print & Export Sheets":
         if st.button("Generate Official Two-Page W-TLAR PDF", type="primary", use_container_width=True):
             filename = f"Weekly_2Page_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
             
-            # Explicit Landscape setup targeting physical printer drivers
-            doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=18, leftMargin=18, topMargin=18, bottomMargin=18)
+            # Explicit Landscape boundaries targeting physical printer configurations
+            doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=16, leftMargin=16, topMargin=16, bottomMargin=16)
             story = []
             styles = getSampleStyleSheet()
             
-            # Enhanced typography sizing and matching vertical line heights (leading) to prevent overlapping
-            title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=13, leading=16, alignment=1, textColor=colors.HexColor("#1A237E"))
-            section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=10.5, leading=14, spaceBefore=6, spaceAfter=4, textColor=colors.HexColor("#1A237E"))
-            meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=9.5, leading=13)
-            grid_text_style = ParagraphStyle('GridText', parent=styles['Normal'], fontSize=7.5, leading=10.5, alignment=0)
-            summary_text_style = ParagraphStyle('SummaryText', parent=styles['Normal'], fontSize=8.5, leading=12)
+            # Larger font sizes with proportional vertical leading parameters to maximize physical visibility
+            title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=12, leading=14, alignment=1, textColor=colors.HexColor("#1A237E"))
+            section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=10, leading=13, spaceBefore=4, spaceAfter=3, textColor=colors.HexColor("#1A237E"))
+            meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=9, leading=12)
+            grid_text_style = ParagraphStyle('GridText', parent=styles['Normal'], fontSize=7.5, leading=10, alignment=0)
+            summary_text_style = ParagraphStyle('SummaryText', parent=styles['Normal'], fontSize=8, leading=11)
             
             # -----------------------------------------------------------------
-            # PAGE 1: TITLE META AND SECTION A ATTENDANCE LOG GRID (10 LESSONS)
+            # PAGE 1: TITLE META AND SECTION A ATTENDANCE LOG GRID (10 REAL LESSONS)
             # -----------------------------------------------------------------
             story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
             story.append(Paragraph("<b>WEEKLY TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
-            story.append(Spacer(1, 5))
+            story.append(Spacer(1, 3))
             
             meta_text = [
                 [Paragraph(f"<b>Institution:</b> St. Michael Senior School - Kipsombe", meta_style), Paragraph("<b>Form Ref:</b> TSC/QAS/TPAD/W-TLAR/2026/V4", meta_style)],
                 [Paragraph(f"<b>Class Stream:</b> {exp_class}", meta_style), Paragraph(f"<b>Log Period:</b> {mon_date_str} to {fri_date_str}", meta_style)]
             ]
-            meta_table = Table(meta_text, colWidths=[380, 380])
-            meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
+            meta_table = Table(meta_text, colWidths=[385, 385])
+            meta_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 1)]))
             story.append(meta_table)
             
             story.append(Paragraph("<b>SECTION A: WEEKLY LESSON TRACKING MATRIX WITH VERIFIED TRACK TIMINGS</b>", section_style))
@@ -467,13 +467,12 @@ elif menu == "Print & Export Sheets":
             grid_headers = ["Lesson Slot", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
             grid_data = [grid_headers]
             
-            # Generate exactly 10 pure teaching lines on the final PDF document
+            # Print exactly 10 teachable rows by programmatically filtering out the 3 rest intervals
             for l_num in range(1, 11):
                 row_cells = [f"Lesson {l_num}"]
                 for day in WEEKDAYS:
                     d_str = week_dates[day]
                     
-                    # Fetch all rows for the current day to filter rest gaps programmatically
                     cursor.execute(
                         """SELECT t.id, t.subject FROM timetable t
                            JOIN classes c ON t.class_id = c.id
@@ -482,7 +481,7 @@ elif menu == "Print & Export Sheets":
                     )
                     all_day_slots = cursor.fetchall()
                     
-                    # Filter out rest frames to locate our true target lesson index matches
+                    # Filter out break, tea break, and lunch items from our printed line matrix
                     academic_slots = [slot for slot in all_day_slots if slot[1].strip().upper() not in REST_BLOCKS]
                     
                     if len(academic_slots) < l_num:
@@ -513,7 +512,7 @@ elif menu == "Print & Export Sheets":
                         
                 grid_data.append(row_cells)
                 
-            matrix_table = Table(grid_data, colWidths=[65, 139, 139, 139, 139, 139])
+            matrix_table = Table(grid_data, colWidths=[65, 141, 141, 141, 141, 141])
             matrix_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#EEEEEE")),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
@@ -521,19 +520,19 @@ elif menu == "Print & Export Sheets":
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('TOPPADDING', (0,0), (-1,-1), 4),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ('TOPPADDING', (0,0), (-1,-1), 2.5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
             ]))
             story.append(matrix_table)
             
             story.append(PageBreak())
             
             # -----------------------------------------------------------------
-            # PAGE 2: STAFF SUMMARY REGISTER WITH ENHANCED FONT SIZES
+            # PAGE 2: TITLE META AND SECTION B STAFF SUMMARY PERFORMANCE MATRIX
             # -----------------------------------------------------------------
             story.append(Paragraph("<b>TEACHERS SERVICE COMMISSION</b>", title_style))
             story.append(Paragraph("<b>WEEKLY TEACHER LESSON ATTENDANCE REGISTER (W-TLAR)</b>", title_style))
-            story.append(Spacer(1, 5))
+            story.append(Spacer(1, 3))
             story.append(meta_table) 
             
             story.append(Paragraph("<b>SECTION B: CUMULATIVE MASTER TEACHER PERFORMANCE SUMMARY REGISTER (ALL STAFF)</b>", section_style))
@@ -555,19 +554,19 @@ elif menu == "Print & Export Sheets":
                     Paragraph(str(metric[4]), summary_text_style)
                 ])
                 
-            summary_table = Table(summary_headers, colWidths=[280, 120, 120, 120, 120])
+            summary_table = Table(summary_headers, colWidths=[290, 120, 120, 120, 120])
             summary_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#E0F2F1")),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('TOPPADDING', (0,0), (-1,-1), 3),  
-                ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+                ('TOPPADDING', (0,0), (-1,-1), 1.5),  
+                ('BOTTOMPADDING', (0,0), (-1,-1), 1.5),
             ]))
             story.append(summary_table)
-            story.append(Spacer(1, 8))
+            story.append(Spacer(1, 4))
             
-            sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=8.5, leading=12)
+            sig_style = ParagraphStyle('SigLine', parent=styles['Normal'], fontSize=8, leading=11)
             sig_text = [
                 [Paragraph("<b>Compiled By:</b> Class Secretary Monitor<br/>Sign: _______________________", sig_style),
                  Paragraph("<b>Verified By:</b> Deputy Head of Institution<br/>Sign: _______________________", sig_style)],
@@ -575,8 +574,8 @@ elif menu == "Print & Export Sheets":
                 [Paragraph("<br/><b>Confirmed By:</b> Head of Institution<br/>Sign: _______________________<br/>Date: _______________________", sig_style),
                  Paragraph("<br/><b>Official Institution Stamp Check:</b><br/>[ Place Stamp Box Here ]", sig_style)]
             ]
-            sig_table = Table(sig_text, colWidths=[380, 380])
-            sig_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
+            sig_table = Table(sig_text, colWidths=[385, 385])
+            sig_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('BOTTOMPADDING', (0,0), (-1,-1), 1)]))
             story.append(sig_table)
             
             doc.build(story)
