@@ -68,9 +68,10 @@ def init_database():
 
 conn, cursor = init_database()
 
-# Strict filtering tags to ignore non-teachable slots
+# Comprehensive non-instructional rest filtering blocks 
 REST_BLOCKS = {"BREAK", "LUNCH", "TEA BREAK", "TEA"}
 
+# Complete mapping of elective splits parsed out of the school timetable
 ELECTIVE_SPLITS = {
     "HIST/COMP/AGR": ["HISTO", "COMP", "AGRIC"],
     "CRE CSL": ["CRE", "CSL"],
@@ -85,7 +86,11 @@ ELECTIVE_SPLITS = {
     "PHY CRE": ["PHY", "CRE"],
     "PE ICT": ["PE", "ICT"],
     "CSL ENG": ["CSL", "ENG"],
-    "CH/FREN": ["CHEM", "CRE"]
+    "CH/FREN": ["CHEM", "CRE"],
+    "MAT HS": ["MAT", "HIS"],
+    "HS MAT": ["HIS", "MAT"],
+    "CH/ FREN COMP S/BST/ AGRIC": ["CHEM", "CRE", "COMP", "AGRIC"],
+    "AGRIC S/BST/ FREN CH COMP": ["AGRIC", "CRE", "CHEM", "COMP"]
 }
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
@@ -249,7 +254,7 @@ elif menu == "Teachers & Assignments":
             t_options = {f"{name} ({tsc})": tsc for tsc, name in teachers_mapping}
             
             assign_class = st.selectbox("Target Class", list(c_options.keys()))
-            assign_sub = st.selectbox("Subject Name", ["MAT", "ENG", "KIS", "CRE", "HIS", "HISTO", "GEO", "ICT", "PE", "CSL", "BIO", "CHEM", "PHY", "COMP", "AGRIC"])
+            assign_sub = st.selectbox("Subject Name", ["MAT", "ENG", "KIS", "CRE", "HIS", "HISTO", "GEO", "ICT", "PE", "CSL", "BIO", "CHEM", "PHY", "COMP", "AGRIC", "PPI", "B.P", "G.S"])
             assign_tea = st.selectbox("Assign Teacher", list(t_options.keys()))
             
             if st.button("Commit Subject Assignment", type="primary"):
@@ -275,10 +280,10 @@ elif menu == "Teachers & Assignments":
             df = pd.DataFrame(matrix_data, columns=["Class / Form", "Subject Name", "Assigned Teacher"])
             st.dataframe(df, use_container_width=True, hide_index=True)
 
-# --- VIEW 3: AUTOMATED DATA IMPORTER ---
+# --- VIEW 3: AUTOMATED DATA IMPORTER (TRUE TIMETABLE MATRIX ALIGNED) ---
 elif menu == "System Data Importer":
     st.subheader("⚙️ Automated System Structural Setup Panel")
-    st.write("Inject complete 13-slot schedules. The system will track everything but print only the 10 teachable blocks.")
+    st.write("Inject complete 13-slot schedules directly from Timetable.pdf sources.")
     
     if st.button("Import School Staff Roster (Teacher numbers list)", use_container_width=True):
         teachers_list = [
@@ -301,17 +306,17 @@ elif menu == "System Data Importer":
     if st.button("Import Complete 13-Entry Multi-Class Timetable Grid", use_container_width=True):
         target_classes = ["4M", "4S", "3M", "3S", "10 Social Science", "10 Stem"]
         
-        # Expanded grids to match a complete 13-slot physical day profile (10 teachable + 3 breaks)
+        # Rigorously updated to mirror physical PDF timetable entries sequentially
         master_grids = {
             "10 Stem": {
-                "Monday":    ["MAT", "MAT", "TEA BREAK", "KIS", "BIO", "BREAK", "HIS", "KIS", "LUNCH", "CRE CSL", "ENG", "PHY", "CHEM"],
-                "Tuesday":   ["PE", "ENG", "TEA BREAK", "MAT", "MAT", "BREAK", "KIS", "HIS", "LUNCH", "CRE BIO CSL", "BIO", "CHEM", "MAT"],
-                "Wednesday": ["MAT", "MAT", "TEA BREAK", "CRE", "ENG", "BREAK", "KIS", "HIS", "LUNCH", "BIO", "PHY", "CHEM", "MAT"],
-                "Thursday":  ["MAT", "MAT", "TEA BREAK", "CRE", "ENG", "BREAK", "KIS", "HIS", "LUNCH", "ENG", "BIO", "PHY", "CHEM"],
-                "Friday":    ["PE ICT", "PE ICT", "TEA BREAK", "ENG", "KIS", "BREAK", "HIS", "MAT", "LUNCH", "BIO", "PHY", "CHEM", "MAT"]
+                "Monday":    ["MAT HS", "KIS", "TEA BREAK", "BIO", "CHEM", "BREAK", "MAT HS", "KIS", "LUNCH", "CRE CSL", "ENG", "PHY", "CHEM"],
+                "Tuesday":   ["PE", "ENG", "TEA BREAK", "MAT HS", "KIS", "BREAK", "MAT HS", "CHEM", "LUNCH", "CRE BIO CSL", "BIO", "CHEM", "MAT HS"],
+                "Wednesday": ["MAT HS", "CRE", "TEA BREAK", "ENG", "MAT HS", "BREAK", "KIS", "CHEM", "LUNCH", "BIO", "PHY", "CHEM", "MAT HS"],
+                "Thursday":  ["MAT HS", "CRE", "TEA BREAK", "ENG", "MAT HS", "BREAK", "KIS", "CHEM", "LUNCH", "ENG", "BIO", "PHY", "CHEM"],
+                "Friday":    ["PE ICT", "TEA BREAK", "ENG", "KIS", "BREAK", "MAT HS", "CHEM", "LUNCH", "BIO", "PHY", "CHEM", "MAT HS", "ENG"]
             },
             "10 Social Science": {
-                "Monday":    ["PPI", "KIS", "TEA BREAK", "CSL", "MAT", "BREAK", "HIS MAT", "GE STO", "LUNCH", "PE", "ENG", "HIS", "GEO"],
+                "Monday":    ["PPI", "KIS", "TEA BREAK", "CSL", "MAT", "BREAK", "HS MAT", "GE STO", "LUNCH", "PE", "ENG", "HIS", "GEO"],
                 "Tuesday":   ["GE STO", "CRE", "TEA BREAK", "HIS MAT", "KIS", "BREAK", "ICT", "ENG", "LUNCH", "PE", "MAT", "HIS", "CSL"],
                 "Wednesday": ["GE STO", "KIS", "TEA BREAK", "HIS MAT", "ICT", "BREAK", "ENG", "GE STO", "LUNCH", "PE", "CRE", "ENG", "MAT"],
                 "Thursday":  ["KIS", "ENG", "TEA BREAK", "GE STO", "CSL", "BREAK", "B.P", "B.P", "LUNCH", "G.S", "MAT", "HIS", "PE"],
@@ -352,7 +357,7 @@ elif menu == "System Data Importer":
             ("CHEM", "T.2"), ("PHY", "T.18"), ("CRE", "T.10"), ("HIS", "T.13"),
             ("PE", "T.11"), ("ICT", "T.17"), ("CSL", "T.16"), ("LS", "T.1"),
             ("HISTO GEO", "T.13"), ("GE STO", "T.12"), ("HISTO", "T.5"), 
-            ("COMP", "T.17"), ("AGRIC", "T.1"), ("PPI", "T.10"), ("B.P", "T.12"), ("G.S", "T.13")
+            ("COMP", "T.17"), ("AGRIC", "T.1"), ("PPI", "T.1"), ("B.P", "T.15"), ("G.S", "T.16")
         ]
         
         total_slots_inserted = 0
@@ -370,7 +375,7 @@ elif menu == "System Data Importer":
             for sub, tsc in teacher_fallbacks:
                 cursor.execute("INSERT INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (%s, %s, %s);", (class_id, sub, tsc))
             
-            class_grid = master_grids.get(c_name, master_grids["10 Stem"])
+            class_grid = master_grids.get(c_name)
             for day in WEEKDAYS:
                 lessons = class_grid[day]
                 for index, sub_name in enumerate(lessons):
@@ -440,7 +445,6 @@ elif menu == "Print & Export Sheets":
             story = []
             styles = getSampleStyleSheet()
             
-            # Larger font sizes with proportional vertical leading parameters to maximize physical visibility
             title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=12, leading=14, alignment=1, textColor=colors.HexColor("#1A237E"))
             section_style = ParagraphStyle('SectionTitle', parent=styles['Heading2'], fontSize=10, leading=13, spaceBefore=4, spaceAfter=3, textColor=colors.HexColor("#1A237E"))
             meta_style = ParagraphStyle('DocMeta', parent=styles['Normal'], fontSize=9, leading=12)
