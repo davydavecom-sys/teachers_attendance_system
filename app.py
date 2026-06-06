@@ -71,8 +71,7 @@ conn, cursor = init_database()
 # Comprehensive non-instructional rest filtering blocks 
 REST_BLOCKS = {"BREAK", "LUNCH", "TEA BREAK", "TEA"}
 
-# Legacy hardcoded combinations preserved for backwards compatibility
-LEGACY_SPLITS = {
+ELECTIVE_SPLITS = {
     "HIST/COMP/AGR": ["HISTO", "COMP", "AGRIC"],
     "CRE CSL": ["CRE", "CSL"],
     "CRE BIO CSL": ["CRE", "BIO", "CSL"],
@@ -92,20 +91,6 @@ LEGACY_SPLITS = {
     "CH/ FREN COMP S/BST/ AGRIC": ["CHEM", "CRE", "COMP", "AGRIC"],
     "AGRIC S/BST/ FREN CH COMP": ["AGRIC", "CRE", "CHEM", "COMP"]
 }
-
-# DYNAMIC PARSING ENGINE FOR PARALLEL LESSONS
-def parse_active_subjects(raw_subject_string):
-    cleaned_string = raw_subject_string.strip()
-    
-    # 1. Check if it matches any legacy spaces/slashes formatting combinations
-    if cleaned_string in LEGACY_SPLITS:
-        return LEGACY_SPLITS[cleaned_string]
-        
-    # 2. Dynamic Separation: Split automatically if the user separates custom items using a forward slash '/'
-    if "/" in cleaned_string:
-        return [sub.strip() for sub in cleaned_string.split("/") if sub.strip()]
-        
-    return [cleaned_string]
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
@@ -163,8 +148,7 @@ if menu == "Attendance Log":
                     if raw_subject.strip().upper() in REST_BLOCKS:
                         continue
                         
-                    # Utilize the dynamic engine to identify items
-                    active_subjects = parse_active_subjects(raw_subject)
+                    active_subjects = ELECTIVE_SPLITS.get(raw_subject, [raw_subject])
                     is_split = len(active_subjects) > 1
                     
                     header_label = f"📖 Academic Lesson {academic_lesson_index}: {raw_subject}"
@@ -269,21 +253,18 @@ elif menu == "Teachers & Assignments":
             t_options = {f"{name} ({tsc})": tsc for tsc, name in teachers_mapping}
             
             assign_class = st.selectbox("Target Class", list(c_options.keys()))
-            assign_sub = st.text_input("Subject Shorthand Name:", placeholder="e.g. COMP, AGRIC, BIO, CHEM")
+            assign_sub = st.selectbox("Subject Name", ["MAT", "ENG", "KIS", "CRE", "HIS", "HISTO", "GEO", "ICT", "PE", "CSL", "BIO", "CHEM", "PHY", "COMP", "AGRIC", "PPI", "B.P", "G.S"])
             assign_tea = st.selectbox("Assign Teacher", list(t_options.keys()))
             
             if st.button("Commit Subject Assignment", type="primary"):
-                if assign_sub.strip():
-                    cursor.execute(
-                        """INSERT INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (%s, %s, %s)
-                           ON CONFLICT(class_id, subject_name) DO UPDATE SET teacher_tsc = EXCLUDED.teacher_tsc;""",
-                        (c_options[assign_class], assign_sub.strip().upper(), t_options[assign_tea])
-                    )
-                    conn.commit()
-                    st.success(f"Assigned role for {assign_sub.strip().upper()} successfully.")
-                    st.rerun()
-                else:
-                    st.error("Please enter a valid Subject Shorthand string.")
+                cursor.execute(
+                    """INSERT INTO subject_assignments (class_id, subject_name, teacher_tsc) VALUES (%s, %s, %s)
+                       ON CONFLICT(class_id, subject_name) DO UPDATE SET teacher_tsc = EXCLUDED.teacher_tsc;""",
+                    (c_options[assign_class], assign_sub, t_options[assign_tea])
+                )
+                conn.commit()
+                st.success("Assigned role successfully.")
+                st.rerun()
 
     with col2:
         st.markdown("#### Current Class Subject Matrix Assignments")
@@ -298,10 +279,10 @@ elif menu == "Teachers & Assignments":
             df = pd.DataFrame(matrix_data, columns=["Class / Form", "Subject Name", "Assigned Teacher"])
             st.dataframe(df, use_container_width=True, hide_index=True)
 
-# --- VIEW 3: SYSTEM DATA IMPORTER (MANUAL OVERRIDE IMPLEMENTED WITH DYNAMIC PARALEL SUPPORT) ---
+# --- VIEW 3: AUTOMATED & MANUAL DATA IMPORTER (MANUAL OVERRIDE IMPLEMENTED) ---
 elif menu == "System Data Importer":
     st.subheader("⚙️ System Structural Setup Panel")
-    st.write("Manage or completely input your school timetable structures below manually.")
+    st.write("Manage or completely input your school timetable structures below.")
     
     if st.button("Step 1: Initialize Default School Staff Roster", use_container_width=True):
         teachers_list = [
@@ -321,14 +302,15 @@ elif menu == "System Data Importer":
         
     st.markdown("---")
     st.markdown("### ✍️ Step 2: Interactive Manual Timetable Matrix Input Grid")
-    st.markdown("💡 **How to enter Parallel Elective Slots:** Type subjects separated by a slash (e.g. `CHEM/COMP/AGRIC` or `BIO/CRE`).")
+    st.write("Select a class stream to modify or enter its sequential 13-slot daily structure. Type `TEA BREAK`, `BREAK`, or `LUNCH` to mark non-instructional intervals.")
     
+    # Allow creating a class name dynamically if it doesn't exist
     new_class_input = st.text_input("Add a New Class Stream Name (e.g., '10 Stem', '4M'):")
     if st.button("Create Class Stream Row"):
         if new_class_input.strip():
             cursor.execute("INSERT INTO classes (name) VALUES (%s) ON CONFLICT (name) DO NOTHING;", (new_class_input.strip(),))
             conn.commit()
-            st.success(f"Class '{new_class_input.strip()}' created!")
+            st.success(f"Class '{new_class_input.strip()}' created! Refreshing list...")
             st.rerun()
 
     cursor.execute("SELECT name FROM classes ORDER BY name;")
@@ -340,6 +322,7 @@ elif menu == "System Data Importer":
         cursor.execute("SELECT id FROM classes WHERE name = %s;", (active_manual_class,))
         active_class_id = cursor.fetchone()[0]
         
+        # Load any existing data from database into a dictionary map for easy form populating
         existing_grid_map = {}
         cursor.execute("SELECT day_of_week, lesson_number, subject FROM timetable WHERE class_id = %s;", (active_class_id,))
         for day, slot_num, subj in cursor.fetchall():
@@ -347,12 +330,18 @@ elif menu == "System Data Importer":
 
         st.markdown(f"#### Fill/Modify 13 Sequential Slots for **{active_manual_class}**")
         
+        # Display an explanation of slots to prevent input error
+        st.info("💡 **Structure Reference:** Slot 1 (8:00 AM), Slot 2 (8:40 AM), Slot 3 (9:20 AM), Slot 4 (TEA BREAK), Slot 5 (10:20 AM), etc.")
+        
         manual_payload = {}
+        
+        # Create a tab for each day to keep the UI perfectly clean
         day_tabs = st.tabs(WEEKDAYS)
         for i, day in enumerate(WEEKDAYS):
             with day_tabs[i]:
-                st.write(f"✍️ Enter timeline sequence for **{day}**:")
+                st.write(f"✍️ Enter full timeline sequence for **{day}**:")
                 
+                # We show columns for the slots
                 cols_1 = st.columns(4)
                 cols_2 = st.columns(4)
                 cols_3 = st.columns(5)
@@ -361,9 +350,10 @@ elif menu == "System Data Importer":
                 for slot in range(1, 14):
                     default_val = existing_grid_map.get((day, slot), "")
                     
+                    # Pre-fill standard intervals if completely empty to save user time
                     if not default_val:
-                        if slot == 3 or slot == 4:
-                            if "Science" in active_manual_class or "Social" in active_manual_class:
+                        if slot == 3 or slot == 4:  # Depends on class, but can be customized
+                            if "Science" in active_manual_class:
                                 if slot == 3: default_val = "TEA BREAK"
                             else:
                                 if slot == 4: default_val = "TEA BREAK"
@@ -371,23 +361,25 @@ elif menu == "System Data Importer":
                         if slot == 9: default_val = "LUNCH"
                     
                     with all_cols[slot-1]:
-                        val = st.text_input(f"Slot {slot}", value=default_val, key=f"manual_{day}_{slot}", placeholder="e.g. CHEM/COMP")
+                        val = st.text_input(f"Slot {slot}", value=default_val, key=f"manual_{day}_{slot}", placeholder="e.g. MAT HS")
                         manual_payload[(day, slot)] = val.strip()
                         
         if st.button("Save Manual Timetable Data to Database", type="primary", use_container_width=True):
+            # Wipe previous structural entries for this specific class to prevent overlapping conflicts
             cursor.execute("DELETE FROM attendance_log WHERE timetable_id IN (SELECT id FROM timetable WHERE class_id = %s);", (active_class_id,))
             cursor.execute("DELETE FROM timetable WHERE class_id = %s;", (active_class_id,))
             
+            # Inject new manually keyed entries
             inserted_count = 0
             for (day, slot), subject_str in manual_payload.items():
-                if subject_str:
+                if subject_str:  # Only save if not empty
                     cursor.execute(
                         "INSERT INTO timetable (class_id, day_of_week, lesson_number, subject) VALUES (%s, %s, %s, %s);",
                         (active_class_id, day, slot, subject_str)
                     )
                     inserted_count += 1
             
-            # Auto fallback mapping loops
+            # Seed default teacher relationships for newly generated subjects if missing
             teacher_fallbacks = [
                 ("MAT", "T.6"), ("ENG", "T.5"), ("KIS", "T.4"), ("BIO", "T.15"),
                 ("CHEM", "T.2"), ("PHY", "T.18"), ("CRE", "T.10"), ("HIS", "T.13"),
@@ -402,7 +394,7 @@ elif menu == "System Data Importer":
                 )
                 
             conn.commit()
-            st.success(f"Successfully saved {inserted_count} timetable slots with custom elective structures!")
+            st.success(f"Successfully saved {inserted_count} timetable slots for {active_manual_class}!")
             st.rerun()
 
 # --- VIEW 4: PRINT ENGINE AND EXPORT VIEW (STRICT TWO-PAGE REPORT ENGINE) ---
@@ -460,6 +452,7 @@ elif menu == "Print & Export Sheets":
         if st.button("Generate Official Two-Page W-TLAR PDF", type="primary", use_container_width=True):
             filename = f"Weekly_2Page_TLAR_{exp_class}_{mon_date_str}.pdf".replace(" ", "_")
             
+            # Explicit Landscape boundaries targeting physical printer configurations
             doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=16, leftMargin=16, topMargin=16, bottomMargin=16)
             story = []
             styles = getSampleStyleSheet()
@@ -490,6 +483,7 @@ elif menu == "Print & Export Sheets":
             grid_headers = ["Lesson Slot", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
             grid_data = [grid_headers]
             
+            # Print exactly 10 teachable rows by programmatically filtering out the rest intervals
             for l_num in range(1, 11):
                 row_cells = [f"Lesson {l_num}"]
                 for day in WEEKDAYS:
@@ -503,15 +497,14 @@ elif menu == "Print & Export Sheets":
                     )
                     all_day_slots = cursor.fetchall()
                     
+                    # Filter out break, tea break, and lunch items from our printed line matrix
                     academic_slots = [slot for slot in all_day_slots if slot[1].strip().upper() not in REST_BLOCKS]
                     
                     if len(academic_slots) < l_num:
                         row_cells.append(Paragraph("<font color='grey'>No Lesson</font>", grid_text_style))
                     else:
                         tt_id, raw_sub = academic_slots[l_num - 1]
-                        
-                        # Apply dynamic split mapping logic to PDF renderer
-                        active_subs = parse_active_subjects(raw_sub)
+                        active_subs = ELECTIVE_SPLITS.get(raw_sub, [raw_sub])
                         
                         status_flags = []
                         for sub in active_subs:
